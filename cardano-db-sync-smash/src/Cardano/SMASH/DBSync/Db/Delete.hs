@@ -9,29 +9,24 @@ module Cardano.SMASH.DBSync.Db.Delete
 
 import           Cardano.Prelude hiding (Meta)
 
-import           Database.Persist.Sql (SqlBackend, delete, selectKeysList, (==.))
+import           Database.Persist.Sql (SqlBackend)
 
 import           Cardano.Db
 
+import           Cardano.Sync.Util
+
 -- | Delete a delisted pool if it exists. Returns 'True' if it did exist and has been
 -- deleted and 'False' if it did not exist.
-deleteDelistedPool :: MonadIO m => PoolIdentifier -> ReaderT SqlBackend m Bool
-deleteDelistedPool poolId = do
-  keys <- selectKeysList [ DelistedPoolPoolId ==. poolId ] []
-  mapM_ delete keys
-  pure $ not (null keys)
+deleteDelistedPool :: PoolIdentifier -> ReaderT SqlBackend m Bool
+deleteDelistedPool poolId =
+  panic $ "deleteDelistedPool " <> textShow poolId
 
 -- | Delete a retired pool if it exists. Returns 'True' if it did exist and has been
 -- deleted and 'False' if it did not exist.
-deleteRetiredPool :: MonadIO m => PoolIdentifier -> ReaderT SqlBackend m Bool
-deleteRetiredPool poolId = do
-  keys <- selectKeysList [ RetiredPoolPoolId ==. poolId ] []
-  mapM_ delete keys
-  pure $ not (null keys)
+deleteRetiredPool :: PoolIdentifier -> ReaderT SqlBackend m Bool
+deleteRetiredPool poolId =
+  panic $ "deleteRetiredPool " <> textShow poolId
 
-deleteAdminUser :: MonadIO m => AdminUser -> ReaderT SqlBackend m Bool
+deleteAdminUser :: AdminUser -> ReaderT SqlBackend m Bool
 deleteAdminUser adminUser = do
-  keys <- selectKeysList [ AdminUserUsername ==. adminUserUsername adminUser, AdminUserPassword ==. adminUserPassword adminUser ] []
-  mapM_ delete keys
-  pure $ not (null keys)
-
+  panic $ "deleteAdminUser " <> textShow adminUser

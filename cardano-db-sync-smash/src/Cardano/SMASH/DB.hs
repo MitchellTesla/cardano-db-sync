@@ -6,8 +6,8 @@
 module Cardano.SMASH.DB
     ( module X
     , DataLayer (..)
-    , cachedDataLayer
-    , createCachedDataLayer
+    -- , cachedDataLayer
+    -- , createCachedDataLayer
     , postgresqlDataLayer
     -- * Examples
     , InMemoryCacheIORef (..)
@@ -18,18 +18,18 @@ import           Cardano.Prelude
 
 import           Cardano.BM.Trace (Trace)
 
-import           Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
-import qualified Data.Map as Map
+import           Data.IORef (IORef)
+-- import qualified Data.Map as Map
 import           Data.Time.Clock (UTCTime)
-import           Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+-- import           Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 
 import           Database.Persist.Sql (SqlBackend)
 
-import           Cardano.SMASH.DBSync.Db.Delete (deleteAdminUser, deleteDelistedPool,
-                   deleteRetiredPool)
-import           Cardano.SMASH.DBSync.Db.Insert (insertAdminUser, insertDelistedPool, insertPool,
-                   insertPoolMetadata, insertPoolMetadataFetchError, insertPoolMetadataRef,
-                   insertReservedTicker, insertRetiredPool)
+-- import           Cardano.SMASH.DBSync.Db.Delete (deleteAdminUser, deleteDelistedPool,
+--                    deleteRetiredPool)
+-- import           Cardano.SMASH.DBSync.Db.Insert (insertAdminUser, insertDelistedPool, insertPool,
+--                    insertPoolMetadata, insertPoolMetadataFetchError, insertPoolMetadataRef,
+--                    insertReservedTicker, insertRetiredPool)
 import           Cardano.SMASH.DBSync.Db.Query
 import           Cardano.SMASH.Types
 
@@ -84,6 +84,7 @@ data InMemoryCache = InMemoryCache
 newtype InMemoryCacheIORef = InMemoryCacheIORef (IORef InMemoryCache)
     deriving (Eq)
 
+{-
 -- | Caching @DataLayer@.
 -- We do need state here.
 -- _This is thread safe._
@@ -360,9 +361,14 @@ createCachedDataLayer sqlBackend tracer = do
         dataLayer = cachedDataLayer dbDataLayer inMemoryCacheIORef
 
     return dataLayer
+-}
 
 -- TODO(KS): Passing the optional tracer.
 postgresqlDataLayer :: SqlBackend -> Trace IO Text -> DataLayer
+postgresqlDataLayer _ _ =
+  panic "postgresqlDataLayer"
+
+{-
 postgresqlDataLayer sqlBackend tracer = DataLayer
     { dlGetPoolMetadata = \poolId poolMetadataHash' -> do
         poolMetadata <- runDbIohkLogging sqlBackend tracer $ queryPoolMetadata poolId poolMetadataHash'
@@ -479,4 +485,4 @@ postgresqlDataLayer sqlBackend tracer = DataLayer
 convertPoolMetadataFetchError :: PoolMetadataFetchError -> PoolFetchError
 convertPoolMetadataFetchError (PoolMetadataFetchError timeUTC poolId poolHash _pMRId fetchError retryCount) =
     PoolFetchError (utcTimeToPOSIXSeconds timeUTC) poolId poolHash fetchError retryCount
-
+-}

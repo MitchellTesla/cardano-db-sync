@@ -29,17 +29,16 @@ import           Database.PostgreSQL.Simple (SqlError)
 import           Cardano.Db
 import           Cardano.SMASH.Db.Error
 
-insertPool :: (MonadIO m) => Pool -> ReaderT SqlBackend m (Either DBFail PoolId)
-insertPool = insertByReturnKey
+insertPool :: pool -> ReaderT SqlBackend m (Either DBFail poolId)
+insertPool _ = panic "insertPool"
 
-insertPoolMetadata :: (MonadIO m) => PoolMetadata -> ReaderT SqlBackend m (Either DBFail PoolMetadataId)
-insertPoolMetadata = insertByReturnKey
+insertPoolMetadata :: PoolMetadata -> ReaderT SqlBackend m (Either DBFail PoolMetadataId)
+insertPoolMetadata _ = panic "insertPoolMetadata"
 
 insertPoolMetadataRef
-    :: MonadIO m
-    => PoolMetadataRef
+    :: PoolMetadataRef
     -> ReaderT SqlBackend m (Either DBFail PoolMetadataRefId)
-insertPoolMetadataRef = insertByReturnKey
+insertPoolMetadataRef _ = panic "insertPoolMetadataRef"
 
 insertReservedTicker :: (MonadIO m) => ReservedTicker -> ReaderT SqlBackend m (Either DBFail ReservedTickerId)
 insertReservedTicker reservedTicker = do
@@ -57,8 +56,8 @@ insertDelistedPool delistedPool = do
         Nothing -> insertByReturnKey delistedPool
         Just _key -> return . Left . DbInsertError $ "Delisted pool already exists!"
 
-insertRetiredPool :: (MonadIO m) => RetiredPool -> ReaderT SqlBackend m (Either DBFail RetiredPoolId)
-insertRetiredPool = insertByReturnKey
+insertRetiredPool :: retiredPool -> ReaderT SqlBackend m (Either DBFail a)
+insertRetiredPool _poolId = panic "insertRetiredPool"
 
 insertAdminUser :: (MonadIO m) => AdminUser -> ReaderT SqlBackend m (Either DBFail AdminUserId)
 insertAdminUser adminUser = do
