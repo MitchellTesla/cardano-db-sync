@@ -277,10 +277,6 @@ insertPoolRegister
     => Trace IO Text -> Shelley.Network -> EpochNo -> DB.TxId -> Word16 -> Shelley.PoolParams StandardCrypto
     -> ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertPoolRegister tracer network (EpochNo epoch) txId idx params = do
-  mdId <- case strictMaybeToMaybe $ Shelley._poolMD params of
-            Just md -> Just <$> insertMetaData txId md
-            Nothing -> pure Nothing
-
   when (fromIntegral (Shelley.unCoin $ Shelley._poolPledge params) > maxLovelace) $
     liftIO . logWarning tracer $
       mconcat
@@ -296,6 +292,10 @@ insertPoolRegister tracer network (EpochNo epoch) txId idx params = do
         ]
 
   poolHashId <- insertPoolHash (Shelley._poolId params)
+  mdId <- case strictMaybeToMaybe $ Shelley._poolMD params of
+            Just md -> Just <$> insertMetaDataRef poolHashId txId md
+            Nothing -> pure Nothing
+
   poolUpdateId <- lift . DB.insertPoolUpdate $
                     DB.PoolUpdate
                       { DB.poolUpdateHashId = poolHashId
@@ -343,16 +343,17 @@ insertPoolRetire txId epochNum idx keyHash = do
       }
 
 
-insertMetaData
+insertMetaDataRef
     :: (MonadBaseControl IO m, MonadIO m)
-    => DB.TxId -> Shelley.PoolMetadata
-    -> ExceptT SyncNodeError (ReaderT SqlBackend m) DB.PoolMetaDataId
-insertMetaData txId md =
-  lift . DB.insertPoolMetaData $
-    DB.PoolMetaData
-      { DB.poolMetaDataUrl = Shelley.urlToText (Shelley._poolMDUrl md)
-      , DB.poolMetaDataHash = Shelley._poolMDHash md
-      , DB.poolMetaDataRegisteredTxId = txId
+    => DB.PoolHashId -> DB.TxId -> Shelley.PoolMetadata
+    -> ExceptT SyncNodeError (ReaderT SqlBackend m) DB.PoolMetadataRefId
+insertMetaDataRef poolId txId md =
+  lift . DB.insertPoolMetadataRef $
+    DB.PoolMetadataRef
+      { DB.poolMetadataRefPoolId = poolId
+      , DB.poolMetadataRefUrl = Shelley.urlToText (Shelley._poolMDUrl md)
+      , DB.poolMetadataRefHash = Shelley._poolMDHash md
+      , DB.poolMetadataRefRegisteredTxId = txId
       }
 
 insertStakeAddress

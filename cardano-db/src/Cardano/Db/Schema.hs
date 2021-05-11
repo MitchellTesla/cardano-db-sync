@@ -179,11 +179,12 @@ share
   -- -----------------------------------------------------------------------------------------------
   -- A Pool can have more than one owner, so we have a PoolOwner table that references this one.
 
-  PoolMetaData
+  PoolMetadataRef
+    poolId              PoolHashId
     url                 Text
     hash                ByteString          sqltype=hash32type
     registeredTxId      TxId                OnDeleteCascade     -- Only used for rollback.
-    UniquePoolMetaData  url hash
+    UniquePoolMetadataRef poolId hash
 
   PoolUpdate
     hashId              PoolHashId          OnDeleteCascade
@@ -192,7 +193,7 @@ share
     pledge              DbLovelace          sqltype=lovelace
     rewardAddr          ByteString          sqltype=addr29type
     activeEpochNo       Word64
-    metaId              PoolMetaDataId Maybe OnDeleteCascade
+    metaId              PoolMetadataRefId Maybe OnDeleteCascade
     margin              Double                                  -- sqltype=percentage????
     fixedCost           DbLovelace          sqltype=lovelace
     registeredTxId      TxId                OnDeleteCascade     -- Slot number in which the pool was registered.
@@ -388,35 +389,26 @@ share
     UniqueEpochParam    epochNo blockId
 
   -- -----------------------------------------------------------------------------------------------
-  -- SMASH related tables.
-  -- The table containing pools' on-chain reference to its off-chain metadata.
+  -- Pool offline (ie not on the blockchain) data.
 
-  PoolMetadataRef
-    poolId              PoolHashId
-    url                 Text
-    hash                ByteString          sqltype=hash32type
-    UniquePoolMetadataRef poolId hash
-
-  -- The table containing the metadata.
-
-  PoolMetadata
+  PoolOffilineData
     poolId              PoolHashId
     tickerName          Text
     hash                ByteString          sqltype=hash32type
     metadata            Text
     pmrId               PoolMetadataRefId Maybe
-    UniquePoolMetadata  poolId hash
+    UniquePoolOffilineData  poolId hash
 
   -- The pool metadata fetch error. We duplicate the poolId for easy access.
   -- TODO(KS): Debatable whether we need to persist this between migrations!
 
-  PoolMetadataFetchError
+  PoolOfflineFetchError
     fetchTime           UTCTime             sqltype=timestamp
     poolId              PoolHashId
     pmrId               PoolMetadataRefId
     fetchError          Text
     retryCount          Word                sqltype=uinteger
-    UniquePoolMetadataFetchError fetchTime poolId retryCount
+    UniquePoolOfflineFetchError fetchTime poolId retryCount
 
   --------------------------------------------------------------------------
   -- Tables below must be preserved when migrations occur!

@@ -19,7 +19,7 @@ module Cardano.Db.Insert
   , insertParamProposal
   , insertPotTransfer
   , insertPoolHash
-  , insertPoolMetaData
+  , insertPoolMetadataRef
   , insertPoolOwner
   , insertPoolRelay
   , insertPoolRetire
@@ -121,8 +121,8 @@ insertPotTransfer = insertUnchecked "PotTransfer"
 insertPoolHash :: (MonadBaseControl IO m, MonadIO m) => PoolHash -> ReaderT SqlBackend m PoolHashId
 insertPoolHash = insertCheckUnique "PoolHash"
 
-insertPoolMetaData :: (MonadBaseControl IO m, MonadIO m) => PoolMetaData -> ReaderT SqlBackend m PoolMetaDataId
-insertPoolMetaData = insertCheckUnique "PoolMetaData"
+insertPoolMetadataRef :: (MonadBaseControl IO m, MonadIO m) => PoolMetadataRef -> ReaderT SqlBackend m PoolMetadataRefId
+insertPoolMetadataRef = insertCheckUnique "PoolMetadataRef"
 
 insertPoolOwner :: (MonadBaseControl IO m, MonadIO m) => PoolOwner -> ReaderT SqlBackend m PoolOwnerId
 insertPoolOwner = insertCheckUnique "PoolOwner"
