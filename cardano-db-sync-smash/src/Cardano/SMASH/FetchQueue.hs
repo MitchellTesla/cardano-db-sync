@@ -9,20 +9,19 @@ module Cardano.SMASH.FetchQueue
   ) where
 
 
-import           Cardano.Prelude
+import           Cardano.Db
+import           Cardano.Prelude hiding (retry)
+import           Cardano.SMASH.Types (formatTimeToNormal)
 
 import           Data.Time.Clock.POSIX (POSIXTime)
 
-import           Cardano.Db
-
-import           Cardano.SMASH.Types (formatTimeToNormal)
 
 data PoolFetchRetry = PoolFetchRetry
   { pfrReferenceId :: !PoolMetadataRefId
-  , pfrPoolIdWtf   :: !PoolIdentifier
-  , pfrPoolUrl     :: !PoolUrl
-  , pfrPoolMDHash  :: !PoolMetaHash
-  , pfrRetry       :: !Retry
+  , pfrPoolIdent :: !PoolIdent
+  , pfrPoolUrl :: !PoolUrl
+  , pfrPoolMDHash :: !PoolMetaHash
+  , pfrRetry :: !Retry
   } deriving (Show)
 
 data Retry = Retry
@@ -54,14 +53,9 @@ retryAgain fetchTimePOSIX existingRetryCount =
 
 -- A nice pretty printer for the retry.
 showRetryTimes :: Retry -> Text
-showRetryTimes retry' =
-    mconcat
-        [ "Fetch time: '"
-        , formatTimeToNormal $ fetchTime retry'
-        , "', retry time: '"
-        , formatTimeToNormal $ retryTime retry'
-        , "', retry count: '"
-        , show $ retryCount retry'
-        , "'."
-        ]
+showRetryTimes retry =
+  mconcat
+    [ "Fetch time: ", formatTimeToNormal (fetchTime retry), ", retry time: "
+    , formatTimeToNormal (retryTime retry), ", retry count: ", show $ retryCount retry, "."
+    ]
 

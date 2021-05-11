@@ -31,14 +31,17 @@ import           Cardano.SMASH.Db.Error
 
 insertPool :: pool -> ReaderT SqlBackend m (Either DBFail poolId)
 insertPool _ = panic "insertPool"
+-- insertByReturnKey
 
 insertPoolMetadata :: PoolMetadata -> ReaderT SqlBackend m (Either DBFail PoolMetadataId)
 insertPoolMetadata _ = panic "insertPoolMetadata"
+-- insertByReturnKey
 
 insertPoolMetadataRef
     :: PoolMetadataRef
     -> ReaderT SqlBackend m (Either DBFail PoolMetadataRefId)
 insertPoolMetadataRef _ = panic "insertPoolMetadataRef"
+-- insertByReturnKey
 
 insertReservedTicker :: (MonadIO m) => ReservedTicker -> ReaderT SqlBackend m (Either DBFail ReservedTickerId)
 insertReservedTicker reservedTicker = do
@@ -46,7 +49,7 @@ insertReservedTicker reservedTicker = do
     -- If there is no unique constraint violated, insert, otherwise return error.
     case isUnique of
         Nothing -> insertByReturnKey reservedTicker
-        Just _key -> return . Left . ReservedTickerAlreadyInserted $ show reservedTicker
+        Just _key -> pure $ Left (ReservedTickerAlreadyInserted $ reservedTickerName reservedTicker)
 
 insertDelistedPool :: (MonadIO m) => DelistedPool -> ReaderT SqlBackend m (Either DBFail DelistedPoolId)
 insertDelistedPool delistedPool = do
@@ -54,10 +57,11 @@ insertDelistedPool delistedPool = do
     -- If there is no unique constraint violated, insert, otherwise return error.
     case isUnique of
         Nothing -> insertByReturnKey delistedPool
-        Just _key -> return . Left . DbInsertError $ "Delisted pool already exists!"
+        Just _key -> pure . Left . DbInsertError $ "Delisted pool already exists!"
 
 insertRetiredPool :: retiredPool -> ReaderT SqlBackend m (Either DBFail a)
 insertRetiredPool _poolId = panic "insertRetiredPool"
+-- insertByReturnKey
 
 insertAdminUser :: (MonadIO m) => AdminUser -> ReaderT SqlBackend m (Either DBFail AdminUserId)
 insertAdminUser adminUser = do
@@ -65,7 +69,7 @@ insertAdminUser adminUser = do
     -- If there is no unique constraint violated, insert, otherwise return error.
     case isUnique of
         Nothing -> insertByReturnKey adminUser
-        Just _key -> return . Left . DbInsertError $ "Admin user already exists!"
+        Just _key -> pure . Left . DbInsertError $ "Admin user already exists!"
 
 insertPoolMetadataFetchError
     :: (MonadIO m)
@@ -76,7 +80,7 @@ insertPoolMetadataFetchError pmfe = do
     -- If there is no unique constraint violated, insert, otherwise delete and insert.
     case isUnique of
         Nothing -> insertByReturnKey pmfe
-        Just _key -> return . Left . DbInsertError $ "Pool metadata fetch error already exists!"
+        Just _key -> pure . Left . DbInsertError $ "Pool metadata fetch error already exists!"
 
 -------------------------------------------------------------------------------
 

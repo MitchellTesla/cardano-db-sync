@@ -40,7 +40,7 @@ queryAllPools =
 -}
 
 -- |Return pool, that is not RETIRED!
-queryPoolByPoolId :: PoolIdentifier -> ReaderT SqlBackend m (Either DBFail pool)
+queryPoolByPoolId :: PoolIdent -> ReaderT SqlBackend m (Either DBFail pool)
 queryPoolByPoolId poolId = do
   panic $ "queryPoolByPoolId: " <> textShow poolId
 {-
@@ -51,7 +51,7 @@ queryPoolByPoolId poolId = do
   pure $ maybeToEither RecordDoesNotExist entityVal (listToMaybe res)
   where
     -- |Subselect that selects all the retired pool ids.
-    retiredPoolsPoolId :: SqlExpr (ValueList PoolIdentifier)
+    retiredPoolsPoolId :: SqlExpr (ValueList PoolIdent)
     retiredPoolsPoolId =
         subList_select . from $ \(retiredPool :: SqlExpr (Entity RetiredPool)) ->
         return $ retiredPool ^. RetiredPoolPoolId
@@ -67,8 +67,8 @@ queryAllPoolMetadata =
 -}
 
 -- | Get the 'Block' associated with the given hash.
--- We use the @PoolIdentifier@ to get the nice error message out.
-queryPoolMetadata :: PoolIdentifier -> PoolMetaHash -> ReaderT SqlBackend m (Either DBFail PoolMetadata)
+-- We use the @PoolIdent@ to get the nice error message out.
+queryPoolMetadata :: PoolIdent -> PoolMetaHash -> ReaderT SqlBackend m (Either DBFail PoolMetadata)
 queryPoolMetadata poolId poolMetadataHash' = do
   panic $ "queryPoolMetadata: " <> textShow (poolId, poolMetadataHash')
 
@@ -91,7 +91,7 @@ queryAllRetiredPools =
 -}
 
 -- |Query retired pools.
-queryRetiredPool :: PoolIdentifier -> ReaderT SqlBackend m (Either DBFail retiredPool)
+queryRetiredPool :: PoolIdent -> ReaderT SqlBackend m (Either DBFail retiredPool)
 queryRetiredPool poolId =
   panic $ "queryRetiredPool:" <> textShow  poolId
 {-
@@ -103,7 +103,7 @@ queryRetiredPool poolId = do
 -}
 
 -- | Check if the hash is in the table.
-queryDelistedPool :: PoolIdentifier -> ReaderT SqlBackend m Bool
+queryDelistedPool :: PoolIdent -> ReaderT SqlBackend m Bool
 queryDelistedPool poolId =
   panic $ "queryDelistedPool: " <> textShow poolId
 {-
@@ -149,7 +149,7 @@ queryAdminUsers = do
   pure $ entityVal <$> res
 
 -- | Query all the errors we have.
-queryPoolMetadataFetchError :: Maybe PoolIdentifier -> ReaderT SqlBackend m [PoolMetadataFetchError]
+queryPoolMetadataFetchError :: Maybe PoolIdent -> ReaderT SqlBackend m [PoolMetadataFetchError]
 queryPoolMetadataFetchError mPoolId =
   panic $ "queryPoolMetadataFetchError: " <> textShow mPoolId
 
@@ -169,7 +169,7 @@ queryPoolMetadataFetchError (Just poolId) = do
 -- want to see the top 10 errors from _different_ pools (group by), using something like:
 -- select pool_id, pool_hash, max(retry_count) from pool_metadata_fetch_error group by pool_id, pool_hash;
 queryPoolMetadataFetchErrorByTime
-    :: PoolIdentifier
+    :: PoolIdent
     -> Maybe UTCTime
     -> ReaderT SqlBackend m [PoolMetadataFetchError]
 queryPoolMetadataFetchErrorByTime poolId _ =

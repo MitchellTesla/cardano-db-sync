@@ -13,11 +13,11 @@ module Cardano.SMASH.Types
     , UserValidity (..)
     , checkIfUserValid
     -- * Pool info
-    , PoolIdentifier (..)
+    , PoolIdent (..)
     , PoolIdBlockNumber (..)
     , PoolUrl (..)
     , PoolMetaHash (..)
-    , bytestringToPoolMetaHash
+    , PoolMetaHex (..)
     , PoolMetadataRaw (..)
     , TickerName (..)
     , UniqueTicker (..)
@@ -46,7 +46,11 @@ module Cardano.SMASH.Types
     , formatTimeToNormal
     ) where
 
+import           Cardano.Db
 import           Cardano.Prelude
+import           Cardano.SMASH.Db.Error
+import           Cardano.SMASH.Db.Types
+import           Cardano.Sync.Util
 
 import           Control.Monad.Fail (fail)
 
@@ -54,46 +58,39 @@ import           Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:
 import qualified Data.Aeson as Aeson
 import           Data.Aeson.Encoding (unsafeToEncoding)
 import qualified Data.Aeson.Types as Aeson
+import qualified Data.ByteString.Lazy as LBS
+import           Data.Swagger (NamedSchema (..), ToParamSchema (..), ToSchema (..))
+import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
 import           Data.Time.Clock (UTCTime)
 import qualified Data.Time.Clock.POSIX as Time
 import           Data.Time.Format (defaultTimeLocale, formatTime, parseTimeM)
 
-import           Data.Swagger (NamedSchema (..), ToParamSchema (..), ToSchema (..))
-import           Data.Text.Encoding (encodeUtf8Builder)
-
 import           Network.URI (URI, parseURI)
 import           Servant (FromHttpApiData (..), MimeUnrender (..), OctetStream)
 
-import           Cardano.Db
-import           Cardano.SMASH.Db.Error
-import           Cardano.SMASH.Db.Types
 
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.Text.Encoding as E
 
 -- | The Smash @URI@ containing remote filtering data.
-newtype SmashURL = SmashURL { getSmashURL :: URI }
+newtype SmashURL = SmashURL { unSmashURL :: URI }
     deriving (Eq, Show, Generic)
 
 instance ToJSON SmashURL where
     toJSON (SmashURL uri) =
         object
-            [ "smashURL" .= (show uri :: Text)
+            [ "smashURL" .= textShow uri
             ]
 
 instance FromJSON SmashURL where
     parseJSON = withObject "SmashURL" $ \o -> do
         uri <- o .: "smashURL"
-
-        let parsedURI = parseURI uri
-
-        case parsedURI of
+        case parseURI uri of
             Nothing -> fail "Not a valid URI for SMASH server."
-            Just uri' -> return $ SmashURL uri'
+            Just u -> pure $ SmashURL u
 
 instance ToSchema SmashURL where
   declareNamedSchema _ =
-    return $ NamedSchema (Just "SmashURL") mempty
+    pure $ NamedSchema (Just "SmashURL") mempty
 
 -- | The basic @Configuration@.
 newtype Configuration = Configuration
@@ -118,7 +115,7 @@ examplePoolOfflineMetadata =
 data PolicyResult = PolicyResult
     { prSmashURL :: !SmashURL
     , prHealthStatus :: !HealthStatus
-    , prDelistedPools :: ![PoolIdentifier]
+    , prDelistedPools :: ![PoolIdent]
     , prUniqueTickers :: ![UniqueTicker]
     } deriving (Eq, Show, Generic)
 
@@ -133,22 +130,23 @@ instance ToJSON PolicyResult where
 
 instance ToSchema PolicyResult
 
-newtype UniqueTicker = UniqueTicker { getUniqueTicker :: (TickerName, PoolMetaHash) }
-    deriving (Eq, Show, Generic)
+data UniqueTicker = UniqueTicker
+    { utTickerName :: !TickerName
+    , utPoolMetaHash :: !PoolMetaHex
+    } deriving (Eq, Show, Generic)
 
 instance ToJSON UniqueTicker where
-    toJSON (UniqueTicker (tickerName, poolMetadataHash')) =
+    toJSON ut =
         object
-            [ "tickerName" .= getTickerName tickerName
-            , "poolMetadataHash" .= getPoolMetaHash poolMetadataHash'
+            [ "tickerName" .= unTickerName (utTickerName ut)
+            , "poolMetadataHash" .= unPoolMetaHex (utPoolMetaHash ut)
             ]
 
 instance FromJSON UniqueTicker where
     parseJSON = withObject "UniqueTicker" $ \o -> do
-        tickerName <- o .: "tickerName"
-        poolMetadataHash' <- o .: "poolMetadataHash"
-
-        return . UniqueTicker $ (tickerName, poolMetadataHash')
+        UniqueTicker
+          <$> fmap TickerName (o .: "tickerName")
+          <*> fmap PoolMetaHex (o .: "poolMetadataHash")
 
 instance ToSchema UniqueTicker
 
@@ -156,11 +154,11 @@ instance ToParamSchema TickerName
 
 instance ToSchema TickerName
 
-instance ToParamSchema PoolIdentifier
+instance ToParamSchema PoolIdent
 
-instance ToSchema PoolIdentifier
+instance ToSchema PoolIdent
 
-instance ToParamSchema PoolMetaHash
+instance ToParamSchema PoolMetaHex
 
 -- A data type we use to store user credentials.
 data ApplicationUser = ApplicationUser
@@ -200,46 +198,46 @@ instance FromHttpApiData TickerName where
 
 -- Currently deserializing from safe types, unwrapping and wrapping it up again.
 -- The underlying DB representation is HEX.
-instance FromHttpApiData PoolIdentifier where
-    parseUrlPiece poolId = parsePoolId poolId
+instance FromHttpApiData PoolIdent where
+    parseUrlPiece poolId = parsePoolIdent poolId
 
-instance ToSchema PoolMetaHash
+instance ToSchema PoolMetaHex
 
 -- TODO(KS): Temporarily, validation!?
-instance FromHttpApiData PoolMetaHash where
-    parseUrlPiece poolMetadataHash' = Right $ PoolMetaHash poolMetadataHash'
+instance FromHttpApiData PoolMetaHex where
+    parseUrlPiece pmh = Right $ PoolMetaHex pmh
     --TODO: parse hex or bech32
 
 newtype PoolName = PoolName
-    { getPoolName :: Text
+    { unPoolName :: Text
     } deriving (Eq, Show, Ord, Generic)
 
 instance ToSchema PoolName
 
 newtype PoolDescription = PoolDescription
-    { getPoolDescription :: Text
+    { unPoolDescription :: Text
     } deriving (Eq, Show, Ord, Generic)
 
 instance ToSchema PoolDescription
 
 newtype PoolTicker = PoolTicker
-    { getPoolTicker :: Text
+    { unPoolTicker :: Text
     } deriving (Eq, Show, Ord, Generic)
 
 instance ToSchema PoolTicker
 
 newtype PoolHomepage = PoolHomepage
-    { getPoolHomepage :: Text
+    { unPoolHomepage :: Text
     } deriving (Eq, Show, Ord, Generic)
 
 instance ToSchema PoolHomepage
 
 -- | The bit of the pool data off the chain.
 data PoolOfflineMetadata = PoolOfflineMetadata
-    { pomName        :: !PoolName
+    { pomName :: !PoolName
     , pomDescription :: !PoolDescription
-    , pomTicker      :: !PoolTicker
-    , pomHomepage    :: !PoolHomepage
+    , pomTicker :: !PoolTicker
+    , pomHomepage :: !PoolHomepage
     } deriving (Eq, Show, Ord, Generic)
 
 -- | Smart constructor, just adding one more layer of indirection.
@@ -253,92 +251,85 @@ createPoolOfflineMetadata = PoolOfflineMetadata
 
 -- Required instances
 instance FromJSON PoolOfflineMetadata where
-    parseJSON = withObject "poolOfflineMetadata" $ \o -> do
-        name'           <- parseName o
-        description'    <- parseDescription o
-        ticker'         <- parseTicker o
-        homepage'       <- o .: "homepage"
+    parseJSON =
+        withObject "poolOfflineMetadata" $ \o ->
+            PoolOfflineMetadata
+                <$> parseName o
+                <*> parseDescription o
+                <*> parseTicker o
+                <*> fmap PoolHomepage (o .: "homepage")
 
-        return $ PoolOfflineMetadata
-            { pomName           = PoolName name'
-            , pomDescription    = PoolDescription description'
-            , pomTicker         = PoolTicker ticker'
-            , pomHomepage       = PoolHomepage homepage'
-            }
       where
-
         -- Copied from https://github.com/input-output-hk/cardano-node/pull/1299
-
         -- | Parse and validate the stake pool metadata name from a JSON object.
         --
         -- If the name consists of more than 50 characters, the parser will fail.
-        parseName :: Aeson.Object -> Aeson.Parser Text
+        parseName :: Aeson.Object -> Aeson.Parser PoolName
         parseName obj = do
           name <- obj .: "name"
           if length name <= 50
-            then pure name
-            else fail $
-                 "\"name\" must have at most 50 characters, but it has "
-              <> show (length name)
-              <> " characters."
+            then pure $ PoolName name
+            else fail $ mconcat
+                    [ "\"name\" must have at most 50 characters, but it has "
+                    , show (length name), " characters."
+                    ]
 
         -- | Parse and validate the stake pool metadata description from a JSON
         -- object.
         --
         -- If the description consists of more than 255 characters, the parser will
         -- fail.
-        parseDescription :: Aeson.Object -> Aeson.Parser Text
+        parseDescription :: Aeson.Object -> Aeson.Parser PoolDescription
         parseDescription obj = do
           description <- obj .: "description"
           if length description <= 255
-            then pure description
-            else fail $
-                 "\"description\" must have at most 255 characters, but it has "
-              <> show (length description)
-              <> " characters."
+            then pure $ PoolDescription description
+            else fail $ mconcat
+                    [ "\"description\" must have at most 255 characters, but it has "
+                    , show (length description), " characters."
+                    ]
 
         -- | Parse and validate the stake pool ticker description from a JSON object.
         --
         -- If the ticker consists of less than 3 or more than 5 characters, the parser
         -- will fail.
-        parseTicker :: Aeson.Object -> Aeson.Parser Text
+        parseTicker :: Aeson.Object -> Aeson.Parser PoolTicker
         parseTicker obj = do
           ticker <- obj .: "ticker"
           let tickerLen = length ticker
           if tickerLen >= 3 && tickerLen <= 5
-            then pure ticker
-            else fail $
-                 "\"ticker\" must have at least 3 and at most 5 "
-              <> "characters, but it has "
-              <> show (length ticker)
-              <> " characters."
+            then pure $ PoolTicker ticker
+            else fail $ mconcat
+                    [ "\"ticker\" must have at least 3 and at most 5 "
+                    , "characters, but it has ", show (length ticker), " characters."
+                    ]
 
 -- |We presume the validation is not required the other way around?
 instance ToJSON PoolOfflineMetadata where
     toJSON (PoolOfflineMetadata name' description' ticker' homepage') =
         object
-            [ "name"            .= getPoolName name'
-            , "description"     .= getPoolDescription description'
-            , "ticker"          .= getPoolTicker ticker'
-            , "homepage"        .= getPoolHomepage homepage'
+            [ "name" .= unPoolName name'
+            , "description" .= unPoolDescription description'
+            , "ticker" .= unPoolTicker ticker'
+            , "homepage" .= unPoolHomepage homepage'
             ]
 
 instance ToSchema PoolOfflineMetadata
 
 instance MimeUnrender OctetStream PoolMetadataRaw where
-    mimeUnrender _ = Right . PoolMetadataRaw . E.decodeUtf8 . BL.toStrict
+    mimeUnrender _ = Right . PoolMetadataRaw . Text.decodeUtf8 . LBS.toStrict
 
--- Here we are usingg the unsafe encoding since we already have the JSON format
+-- Here we are using the unsafe encoding since we already have the JSON format
 -- from the database.
 instance ToJSON PoolMetadataRaw where
     toJSON (PoolMetadataRaw metadata) = toJSON metadata
-    toEncoding (PoolMetadataRaw metadata) = unsafeToEncoding $ encodeUtf8Builder metadata
+    toEncoding (PoolMetadataRaw metadata) = unsafeToEncoding $ Text.encodeUtf8Builder metadata
 
 instance ToSchema PoolMetadataRaw
 
 instance ToSchema DBFail where
   declareNamedSchema _ =
-    return $ NamedSchema (Just "DBFail") mempty
+    pure $ NamedSchema (Just "DBFail") mempty
 
 -- Result wrapper.
 newtype ApiResult err a = ApiResult (Either err a)
@@ -347,7 +338,6 @@ newtype ApiResult err a = ApiResult (Either err a)
 instance (ToSchema a, ToSchema err) => ToSchema (ApiResult err a)
 
 instance (ToJSON err, ToJSON a) => ToJSON (ApiResult err a) where
-
     toJSON (ApiResult (Left dbFail))  = toJSON dbFail
     toJSON (ApiResult (Right result)) = toJSON result
 
@@ -356,55 +346,54 @@ instance (ToJSON err, ToJSON a) => ToJSON (ApiResult err a) where
 
 -- |Fetch error for the HTTP client fetching the pool.
 data FetchError
-  = FEHashMismatch !PoolIdentifier !Text !Text !Text
-  | FEDataTooLong !PoolIdentifier !Text
-  | FEUrlParseFail !PoolIdentifier !Text !Text
-  | FEJsonDecodeFail !PoolIdentifier !Text !Text
-  | FEHttpException !PoolIdentifier !Text !Text
-  | FEHttpResponse !PoolIdentifier !Text !Int
+  = FEHashMismatch !PoolIdent !PoolUrl !Text !Text
+  | FEDataTooLong !PoolIdent !PoolUrl
+  | FEUrlParseFail !PoolIdent !PoolUrl !Text
+  | FEJsonDecodeFail !PoolIdent !PoolUrl !Text
+  | FEHttpException !PoolIdent !PoolUrl !Text
+  | FEHttpResponse !PoolIdent !PoolUrl !Int
   | FEIOException !Text
-  | FETimeout !PoolIdentifier !Text !Text
-  | FEConnectionFailure !PoolIdentifier !Text
+  | FETimeout !PoolIdent !PoolUrl !Text
+  | FEConnectionFailure !PoolIdent !PoolUrl
   deriving (Eq, Generic)
 
-data PoolIdBlockNumber = PoolIdBlockNumber !PoolIdentifier !Word64
+data PoolIdBlockNumber = PoolIdBlockNumber !PoolIdent !Word64
     deriving (Eq, Show, Generic)
 
 instance ToJSON PoolIdBlockNumber where
     toJSON (PoolIdBlockNumber poolId blockNumber) =
         object
-            [ "poolId"      .= poolId
+            [ "poolId" .= poolId
             , "blockNumber" .= blockNumber
             ]
 
 instance FromJSON PoolIdBlockNumber where
-    parseJSON = withObject "poolIdBlockNumber" $ \o -> do
-        poolId          <- o .: "poolId"
-        blockNumber     <- o .: "blockNumber"
-
-        return $ PoolIdBlockNumber poolId blockNumber
+    parseJSON =
+        withObject "poolIdBlockNumber" $ \o ->
+            PoolIdBlockNumber <$> o .: "poolId" <*> o .: "blockNumber"
 
 instance ToSchema PoolIdBlockNumber
 
--- |Fetch error for the specific @PoolIdentifier@ and the @PoolMetaHash@.
-data PoolFetchError = PoolFetchError !Time.POSIXTime !PoolIdentifier !PoolMetaHash !Text !Word
+-- |Fetch error for the specific @PoolIdent@ and the @PoolMetaHash@.
+data PoolFetchError
+  = PoolFetchError !Time.POSIXTime !PoolIdent !PoolMetaHex !Text !Word
   deriving (Eq, Show, Generic)
 
 instance ToJSON PoolFetchError where
-    toJSON (PoolFetchError time poolId poolHash errorCause retryCount) =
+    toJSON (PoolFetchError time poolId poolHashHex errorCause retryCount) =
         object
-            [ "time"        .= formatTimeToNormal time
-            , "utcTime"     .= (show time :: Text)
-            , "poolId"      .= getPoolIdentifier poolId
-            , "poolHash"    .= getPoolMetaHash poolHash
-            , "cause"       .= errorCause
-            , "retryCount"  .= retryCount
+            [ "time" .= formatTimeToNormal time
+            , "utcTime" .= (show time :: Text)
+            , "poolId" .= unPoolIdent poolId
+            , "poolHash" .= unPoolMetaHex poolHashHex
+            , "cause" .= errorCause
+            , "retryCount" .= retryCount
             ]
 
 instance ToSchema PoolFetchError
 
 formatTimeToNormal :: Time.POSIXTime -> Text
-formatTimeToNormal = toS . formatTime defaultTimeLocale "%d.%m.%Y. %T" . Time.posixSecondsToUTCTime
+formatTimeToNormal = Text.pack . formatTime defaultTimeLocale "%d.%m.%Y. %T" . Time.posixSecondsToUTCTime
 
 -- |Specific time string format.
 newtype TimeStringFormat = TimeStringFormat { unTimeStringFormat :: UTCTime }
@@ -416,37 +405,32 @@ instance FromHttpApiData TimeStringFormat where
         let timeFormat = "%d.%m.%Y"
 
             --parsedTime :: UTCTime <- parseTimeM False defaultTimeLocale "%d.%m.%Y %T" "04.03.2010 16:05:21"
-            parsedTime = parseTimeM False defaultTimeLocale timeFormat $ toS queryParam
+            parsedTime = parseTimeM False defaultTimeLocale timeFormat $ Text.unpack queryParam
         in  TimeStringFormat <$> parsedTime
 
 -- Required for the above, error with newer GHC versions
 instance MonadFail (Either Text) where
-    fail = Left . toS
+    fail = Left . Text.pack
 
 instance ToParamSchema TimeStringFormat
 
 -- |The data for returning the health check for SMASH.
 data HealthStatus = HealthStatus
-    { hsStatus  :: !Text
+    { hsStatus :: !Text
     , hsVersion :: !Text
     } deriving (Eq, Show, Generic)
 
 instance ToJSON HealthStatus where
-    toJSON (HealthStatus hsStatus' hsVersion') =
+    toJSON hs =
         object
-            [ "status"      .= hsStatus'
-            , "version"     .= hsVersion'
+            [ "status" .= hsStatus hs
+            , "version" .= hsVersion hs
             ]
 
 instance FromJSON HealthStatus where
-    parseJSON = withObject "healthStatus" $ \o -> do
-        status          <- o .: "status"
-        version         <- o .: "version"
-
-        return $ HealthStatus
-            { hsStatus  = status
-            , hsVersion = version
-            }
+    parseJSON =
+        withObject "healthStatus" $ \o ->
+            HealthStatus <$> o .: "status" <*> o .: "version"
 
 instance ToSchema HealthStatus
 
@@ -456,6 +440,5 @@ instance ToSchema HealthStatus
 -- The choice is to use the typeclass here since the operation is general and
 -- will be used multiple times (more than 3!).
 class DBConversion dbType regularType where
-    convertFromDB   :: dbType -> regularType
-    convertToDB     :: regularType -> dbType
-
+    convertFromDB :: dbType -> regularType
+    convertToDB :: regularType -> dbType

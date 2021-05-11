@@ -13,11 +13,11 @@ import           Control.Monad.Trans.Except.Extra (firstExceptT, newExceptT)
 
 import           Cardano.SMASH.DB (DBFail (..), DataLayer (..))
 import           Cardano.SMASH.Offline (fetchInsertNewPoolMetadata)
-import           Cardano.SMASH.Types (PoolIdentifier (..), PoolMetaHash (..), PoolUrl (..))
+import           Cardano.SMASH.Types (PoolIdent (..), PoolMetaHash (..), PoolUrl (..))
 
 import           Cardano.Chain.Block (ABlockOrBoundary (..))
 
-import qualified Data.ByteString.Base16 as B16
+import qualified Data.ByteString.Base16 as Base16
 
 import           Database.Persist.Sql (IsolationLevel (..), SqlBackend,
                    transactionSaveWithIsolation)
@@ -68,50 +68,41 @@ smashDbSyncNodePlugin trace' backend =
         }
 
 -- For information on what era we are in.
-data BlockName
+data BlockEra
     = Shelley
     | Allegra
     | Mary
     deriving (Eq, Show)
 
 insertSMASHBlocks
-    :: DataLayer
-    -> SqlBackend
-    -> Trace IO Text
-    -> SyncEnv
-    -> [BlockDetails]
+    :: DataLayer -> SqlBackend -> Trace IO Text -> SyncEnv -> [BlockDetails]
     -> IO (Either SyncNodeError ())
 insertSMASHBlocks dataLayer sqlBackend tracer env blockDetails =
     DB.runDbIohkLogging sqlBackend tracer $
-      traverseMEither (insertSMASHBlock dataLayer tracer env) blockDetails
+      traverseMEither (insertSMASHBlock tracer dataLayer env) blockDetails
 
 -- |TODO(KS): We need to abstract over these blocks so we can test this functionality
 -- separatly from the actual blockchain, using tests only.
 insertSMASHBlock
-    :: DataLayer
-    -> Trace IO Text
-    -> SyncEnv
-    -> BlockDetails
+    :: Trace IO Text -> DataLayer -> SyncEnv -> BlockDetails
     -> ReaderT SqlBackend (LoggingT IO) (Either SyncNodeError ())
-insertSMASHBlock dataLayer tracer env (BlockDetails cblk details) =
+insertSMASHBlock tracer dataLayer env (BlockDetails cblk details) =
   case cblk of
     BlockByron blk -> do
       insertByronBlock tracer blk details
     BlockShelley blk -> do
-      insertShelleyBlock Shelley dataLayer tracer env (Generic.fromShelleyBlock blk) details
+      insertShelleyBlock tracer Shelley dataLayer env (Generic.fromShelleyBlock blk) details
     BlockAllegra blk -> do
-      insertShelleyBlock Allegra dataLayer tracer env (Generic.fromAllegraBlock blk) details
+      insertShelleyBlock tracer Allegra dataLayer env (Generic.fromAllegraBlock blk) details
     BlockMary blk -> do
-      insertShelleyBlock Mary dataLayer tracer env (Generic.fromMaryBlock blk) details
+      insertShelleyBlock tracer Mary dataLayer env (Generic.fromMaryBlock blk) details
 
 
 
 -- We don't care about Byron, no pools there.
 -- Also, we don't want to add additional info to clutter the logs.
 insertByronBlock
-    :: Trace IO Text
-    -> ByronBlock
-    -> DbSync.SlotDetails
+    :: Trace IO Text -> ByronBlock -> DbSync.SlotDetails
     -> ReaderT SqlBackend (LoggingT IO) (Either SyncNodeError ())
 insertByronBlock tracer blk _details = do
   case byronBlockRaw blk of
@@ -128,19 +119,14 @@ insertByronBlock tracer blk _details = do
 
 -- Here we insert pools.
 insertShelleyBlock
-    :: BlockName
-    -> DataLayer
-    -> Trace IO Text
-    -> SyncEnv
-    -> Generic.Block
-    -> SlotDetails
+    :: Trace IO Text -> BlockEra -> DataLayer -> SyncEnv -> Generic.Block -> SlotDetails
     -> ReaderT SqlBackend (LoggingT IO) (Either SyncNodeError ())
-insertShelleyBlock blockName dataLayer tracer env blk details = do
+insertShelleyBlock tracer blockEra dataLayer env blk details = do
 
   runExceptT $ do
 
     let blockNumber = Generic.blkBlockNo blk
-    zipWithM_ (insertTx dataLayer blockNumber tracer env) [0 .. ] (Shelley.blkTxs blk)
+    zipWithM_ (insertTx tracer dataLayer blockNumber env) [0 .. ] (Shelley.blkTxs blk)
 
     liftIO $ do
       let epoch = unEpochNo (sdEpochNo details)
@@ -149,60 +135,47 @@ insertShelleyBlock blockName dataLayer tracer env blk details = do
 
       when (slotWithinEpoch `mod` 1000 == 0) $
         logDebug tracer $ mconcat
-          [ "Insert '", show blockName
-          , "' block pool info: epoch ", show epoch
-          , ", slot ", show slotWithinEpoch
-          , ", block ", show blockNumber
-          , ", global slot ", show globalSlot
+          [ "Insert ", textShow blockEra, " block pool info: epoch ", textShow epoch, ", slot "
+          , textShow slotWithinEpoch, ", block ", textShow blockNumber, ", global slot "
+          , textShow globalSlot
           ]
 
+    -- This is likely to be unwise.
     lift $ transactionSaveWithIsolation Serializable
 
 insertTx
-    :: (MonadIO m)
-    => DataLayer
-    -> BlockNo
-    -> Trace IO Text
-    -> SyncEnv
-    -> Word64
-    -> Generic.Tx
+    :: MonadIO m
+    => Trace IO Text -> DataLayer -> BlockNo -> SyncEnv -> Word64 -> Generic.Tx
     -> ExceptT SyncNodeError m ()
-insertTx dataLayer blockNumber tracer env _blockIndex tx =
-    mapM_ (insertCertificate dataLayer blockNumber tracer env) $ Generic.txCertificates tx
+insertTx tracer dataLayer blockNumber env _blockIndex tx =
+    mapM_ (insertCertificate tracer dataLayer blockNumber env) $ Generic.txCertificates tx
 
 insertCertificate
-    :: (MonadIO m)
-    => DataLayer
-    -> BlockNo
-    -> Trace IO Text
-    -> SyncEnv
-    -> Generic.TxCertificate
+    :: MonadIO m
+    => Trace IO Text -> DataLayer -> BlockNo -> SyncEnv -> Generic.TxCertificate
     -> ExceptT SyncNodeError m ()
-insertCertificate dataLayer blockNumber tracer _env (Generic.TxCertificate _idx cert) =
+insertCertificate tracer dataLayer blockNumber _env (Generic.TxCertificate _idx cert) =
   case cert of
     Shelley.DCertDeleg _deleg ->
         -- Since at some point we start to have a large number of delegation
         -- certificates, this should be output just in debug mode.
         liftIO $ logDebug tracer "insertCertificate: DCertDeleg"
     Shelley.DCertPool pool ->
-        insertPoolCert dataLayer blockNumber tracer pool
+        insertPoolCert tracer dataLayer blockNumber pool
     Shelley.DCertMir _mir ->
         liftIO $ logDebug tracer "insertCertificate: DCertMir"
     Shelley.DCertGenesis _gen ->
         liftIO $ logDebug tracer "insertCertificate: DCertGenesis"
 
 insertPoolCert
-    :: (MonadIO m)
-    => DataLayer
-    -> BlockNo
-    -> Trace IO Text
-    -> Shelley.PoolCert StandardCrypto
+    :: MonadIO m
+    => Trace IO Text -> DataLayer -> BlockNo -> Shelley.PoolCert StandardCrypto
     -> ExceptT SyncNodeError m ()
-insertPoolCert dataLayer blockNumber tracer pCert =
+insertPoolCert tracer dataLayer blockNumber pCert =
   case pCert of
     Shelley.RegPool pParams -> do
-        let poolIdHash = B16.encode . Generic.unKeyHashRaw $ Shelley._poolId pParams
-        let poolId = PoolIdentifier . decodeUtf8 $ poolIdHash
+        let poolIdHash = Base16.encode . Generic.unKeyHashRaw $ Shelley._poolId pParams
+        let poolId = PoolIdent . decodeUtf8 $ poolIdHash
 
         -- Insert pool id
         let addPool = dlAddPool dataLayer
@@ -234,12 +207,12 @@ insertPoolCert dataLayer blockNumber tracer pCert =
                             Right removedPoolId' -> liftIO . logInfo tracer $ "Pool retired, revived: " <> show removedPoolId'
 
         -- Finally, insert the metadata!
-        insertPoolRegister dataLayer tracer pParams
+        insertPoolRegister tracer dataLayer pParams
 
     -- RetirePool (KeyHash 'StakePool era) _ = PoolId
     Shelley.RetirePool poolPubKey _epochNum -> do
-        let poolIdHash = B16.encode . Generic.unKeyHashRaw $ poolPubKey
-        let poolId = PoolIdentifier . decodeUtf8 $ poolIdHash
+        let poolIdHash = Base16.encode . Generic.unKeyHashRaw $ poolPubKey
+        let poolId = PoolIdent . decodeUtf8 $ poolIdHash
 
         liftIO . logInfo tracer $ "Retiring pool with poolId: " <> show poolId
 
@@ -252,21 +225,19 @@ insertPoolCert dataLayer blockNumber tracer pCert =
             Right poolId' -> liftIO . logInfo tracer $ "Added retiring pool with poolId: " <> show poolId'
 
 insertPoolRegister
-    :: forall m. (MonadIO m)
-    => DataLayer
-    -> Trace IO Text
-    -> Shelley.PoolParams StandardCrypto
+    :: MonadIO m
+    => Trace IO Text -> DataLayer -> Shelley.PoolParams StandardCrypto
     -> ExceptT SyncNodeError m ()
-insertPoolRegister dataLayer tracer params = do
-  let poolIdHash = B16.encode . Generic.unKeyHashRaw $ Shelley._poolId params
-  let poolId = PoolIdentifier . decodeUtf8 $ poolIdHash
+insertPoolRegister tracer dataLayer params = do
+  let poolIdHash = Base16.encode . Generic.unKeyHashRaw $ Shelley._poolId params
+  let poolId = PoolIdent . decodeUtf8 $ poolIdHash
 
   case strictMaybeToMaybe $ Shelley._poolMD params of
     Just md -> do
 
         liftIO . logInfo tracer $ "Inserting metadata."
         let metadataUrl = PoolUrl . Shelley.urlToText $ Shelley._poolMDUrl md
-        let metadataHash = PoolMetaHash . decodeUtf8 . B16.encode $ Shelley._poolMDHash md
+        let metadataHash = PoolMetaHash $ Shelley._poolMDHash md
 
         let addMetaDataReference = dlAddMetaDataReference dataLayer
 
@@ -274,12 +245,11 @@ insertPoolRegister dataLayer tracer params = do
         refId <- firstExceptT (\(e :: DBFail) -> NEError $ show e) . newExceptT . liftIO $
             addMetaDataReference poolId metadataUrl metadataHash
 
-        liftIO $ fetchInsertNewPoolMetadata dataLayer tracer refId poolId md
+        liftIO $ fetchInsertNewPoolMetadata tracer dataLayer refId poolId md
 
         liftIO . logInfo tracer $ "Metadata inserted."
 
     Nothing -> pure ()
 
   liftIO . logInfo tracer $ "Inserted pool register."
-  pure ()
 

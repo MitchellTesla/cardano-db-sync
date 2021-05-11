@@ -17,13 +17,13 @@ import           Cardano.Sync.Util
 
 -- | Delete a delisted pool if it exists. Returns 'True' if it did exist and has been
 -- deleted and 'False' if it did not exist.
-deleteDelistedPool :: PoolIdentifier -> ReaderT SqlBackend m Bool
+deleteDelistedPool :: PoolIdent -> ReaderT SqlBackend m Bool
 deleteDelistedPool poolId =
   panic $ "deleteDelistedPool " <> textShow poolId
 
 -- | Delete a retired pool if it exists. Returns 'True' if it did exist and has been
 -- deleted and 'False' if it did not exist.
-deleteRetiredPool :: PoolIdentifier -> ReaderT SqlBackend m Bool
+deleteRetiredPool :: PoolIdent -> ReaderT SqlBackend m Bool
 deleteRetiredPool poolId =
   panic $ "deleteRetiredPool " <> textShow poolId
 

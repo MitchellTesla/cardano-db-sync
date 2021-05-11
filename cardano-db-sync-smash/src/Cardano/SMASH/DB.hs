@@ -10,15 +10,15 @@ module Cardano.SMASH.DB
     -- , createCachedDataLayer
     , postgresqlDataLayer
     -- * Examples
-    , InMemoryCacheIORef (..)
-    , InMemoryCache (..)
+    -- , InMemoryCacheIORef (..)
+    -- , InMemoryCache (..)
     ) where
 
 import           Cardano.Prelude
 
 import           Cardano.BM.Trace (Trace)
 
-import           Data.IORef (IORef)
+-- import           Data.IORef (IORef)
 -- import qualified Data.Map as Map
 import           Data.Time.Clock (UTCTime)
 -- import           Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -40,25 +40,25 @@ import           Cardano.SMASH.Db.Error as X
 -- The resulting operation has to be @IO@, it can be made more granular,
 -- but currently there is no complexity involved for that to be a sane choice.
 data DataLayer = DataLayer
-    { dlGetPoolMetadata         :: PoolIdentifier -> PoolMetaHash -> IO (Either DBFail (TickerName, PoolMetadataRaw))
+    { dlGetPoolMetadata         :: PoolIdent -> PoolMetaHash -> IO (Either DBFail (TickerName, PoolMetadataRaw))
     , dlGetAllPoolMetadata      :: IO [PoolMetadata]
-    , dlAddPoolMetadata         :: Maybe PoolMetadataRefId -> PoolIdentifier -> PoolMetaHash -> PoolMetadataRaw -> PoolTicker -> IO (Either DBFail PoolMetadataRaw)
+    , dlAddPoolMetadata         :: Maybe PoolMetadataRefId -> PoolIdent -> PoolMetaHash -> PoolMetadataRaw -> PoolTicker -> IO (Either DBFail PoolMetadataRaw)
 
-    , dlAddMetaDataReference    :: PoolIdentifier -> PoolUrl -> PoolMetaHash -> IO (Either DBFail PoolMetadataRefId)
+    , dlAddMetaDataReference    :: PoolIdent -> PoolUrl -> PoolMetaHash -> IO (Either DBFail PoolMetadataRefId)
 
     , dlGetReservedTickers      :: IO [(TickerName, PoolMetaHash)]
     , dlAddReservedTicker       :: TickerName -> PoolMetaHash -> IO (Either DBFail TickerName)
     , dlCheckReservedTicker     :: TickerName -> PoolMetaHash -> IO (Maybe TickerName)
 
-    , dlGetDelistedPools        :: IO [PoolIdentifier]
-    , dlCheckDelistedPool       :: PoolIdentifier -> IO Bool
-    , dlAddDelistedPool         :: PoolIdentifier -> IO (Either DBFail PoolIdentifier)
-    , dlRemoveDelistedPool      :: PoolIdentifier -> IO (Either DBFail PoolIdentifier)
+    , dlGetDelistedPools        :: IO [PoolIdent]
+    , dlCheckDelistedPool       :: PoolIdent -> IO Bool
+    , dlAddDelistedPool         :: PoolIdent -> IO (Either DBFail PoolIdent)
+    , dlRemoveDelistedPool      :: PoolIdent -> IO (Either DBFail PoolIdent)
 
-    , dlAddRetiredPool          :: PoolIdentifier -> Word64 -> IO (Either DBFail PoolIdentifier)
-    , dlCheckRetiredPool        :: PoolIdentifier -> IO (Either DBFail (PoolIdentifier, Word64))
-    , dlGetRetiredPools         :: IO (Either DBFail [(PoolIdentifier, Word64)])
-    , dlRemoveRetiredPool       :: PoolIdentifier -> IO (Either DBFail PoolIdentifier)
+    , dlAddRetiredPool          :: PoolIdent -> Word64 -> IO (Either DBFail PoolIdent)
+    , dlCheckRetiredPool        :: PoolIdent -> IO (Either DBFail (PoolIdent, Word64))
+    , dlGetRetiredPools         :: IO (Either DBFail [(PoolIdent, Word64)])
+    , dlRemoveRetiredPool       :: PoolIdent -> IO (Either DBFail PoolIdent)
 
     , dlGetAdminUsers           :: IO (Either DBFail [AdminUser])
     , dlAddAdminUser            :: ApplicationUser -> IO (Either DBFail AdminUser)
@@ -66,25 +66,25 @@ data DataLayer = DataLayer
 
     -- TODO(KS): Switch to PoolFetchError!
     , dlAddFetchError           :: PoolMetadataFetchError -> IO (Either DBFail PoolMetadataFetchErrorId)
-    , dlGetFetchErrors          :: PoolIdentifier -> Maybe UTCTime -> IO (Either DBFail [PoolFetchError])
+    , dlGetFetchErrors          :: PoolIdent -> Maybe UTCTime -> IO (Either DBFail [PoolFetchError])
 
-    , dlGetPool                 :: PoolIdentifier -> IO (Either DBFail PoolIdentifier)
-    , dlAddPool                 :: PoolIdentifier -> IO (Either DBFail PoolIdentifier)
+    , dlGetPool                 :: PoolIdent -> IO (Either DBFail PoolIdent)
+    , dlAddPool                 :: PoolIdent -> IO (Either DBFail PoolIdent)
 
     } deriving (Generic)
 
+{-
 -- | The in-memory cache that server as a front-end to the DB calls.
 data InMemoryCache = InMemoryCache
-    { imcDelistedPools :: [PoolIdentifier]
-    , imcRetiredPools :: [(PoolIdentifier, Word64)]
+    { imcDelistedPools :: [PoolIdent]
+    , imcRetiredPools :: [(PoolIdent, Word64)]
     , imcReservedTickers :: [(TickerName, PoolMetaHash)]
-    , imcMetadata :: Map (PoolIdentifier, PoolMetaHash) (TickerName, PoolMetadataRaw)
+    , imcMetadata :: Map (PoolIdent, PoolMetaHash) (TickerName, PoolMetadataRaw)
     } deriving (Eq, Show, Generic)
 
 newtype InMemoryCacheIORef = InMemoryCacheIORef (IORef InMemoryCache)
     deriving (Eq)
 
-{-
 -- | Caching @DataLayer@.
 -- We do need state here.
 -- _This is thread safe._
@@ -116,7 +116,7 @@ cachedDataLayer dbDataLayer (InMemoryCacheIORef inMemoryCacheIORef) =
         { dlGetPoolMetadata     = \poolId poolMetadataHash' -> do
             inMemoryCache <- readIORef inMemoryCacheIORef
 
-            let metadataMap :: Map (PoolIdentifier, PoolMetaHash) (TickerName, PoolMetadataRaw)
+            let metadataMap :: Map (PoolIdent, PoolMetaHash) (TickerName, PoolMetadataRaw)
                 metadataMap = imcMetadata inMemoryCache
 
             let maybeMetadata = Map.lookup (poolId, poolMetadataHash') metadataMap
@@ -137,12 +137,12 @@ cachedDataLayer dbDataLayer (InMemoryCacheIORef inMemoryCacheIORef) =
                                     poolTicker
 
             -- TODO(KS): Horrible, I know. Will fix.
-            let tickerName = TickerName $ getPoolTicker poolTicker
+            let tickerName = TickerName $ unPoolTicker poolTicker
 
             -- Modify in-memory cache (thread-safe), if the DB operation is a success.
             _ <- liftIO $ atomicModifyIORef' inMemoryCacheIORef $ \inMemoryCache ->
 
-                let metadataMap :: Map (PoolIdentifier, PoolMetaHash) (TickerName, PoolMetadataRaw)
+                let metadataMap :: Map (PoolIdent, PoolMetaHash) (TickerName, PoolMetadataRaw)
                     metadataMap = imcMetadata inMemoryCache
 
                     newMetadataMap = Map.insert (poolId, poolMetadataHash') (tickerName, poolMetadata) metadataMap
@@ -280,7 +280,7 @@ cachedDataLayer dbDataLayer (InMemoryCacheIORef inMemoryCacheIORef) =
         , dlGetRetiredPools     = do
             inMemoryCache <- readIORef inMemoryCacheIORef
             let retiredPools = imcRetiredPools inMemoryCache
-            -- Just get @PoolIdentifier@
+            -- Just get @PoolIdent@
             return $ Right retiredPools
 
         , dlRemoveRetiredPool   = \poolId -> runExceptT $ do
@@ -377,7 +377,7 @@ postgresqlDataLayer sqlBackend tracer = DataLayer
         return $ (,) <$> poolTickerName <*> poolMetadata'
     , dlGetAllPoolMetadata = runDbIohkLogging sqlBackend tracer queryAllPoolMetadata
     , dlAddPoolMetadata     = \mRefId poolId poolHash poolMetadata poolTicker -> do
-        let poolTickerName = TickerName $ getPoolTicker poolTicker
+        let poolTickerName = TickerName $ unPoolTicker poolTicker
         poolMetadataId <- runDbIohkLogging sqlBackend tracer $ insertPoolMetadata $ PoolMetadata poolId poolTickerName poolHash poolMetadata mRefId
 
         case poolMetadataId of
@@ -412,13 +412,13 @@ postgresqlDataLayer sqlBackend tracer = DataLayer
     , dlGetDelistedPools = do
         delistedPoolsDB <- runDbIohkLogging sqlBackend tracer queryAllDelistedPools
         -- Convert from DB-specific type to the "general" type
-        return $ map (PoolIdentifier . getPoolIdentifier . delistedPoolPoolId) delistedPoolsDB
+        return $ map (PoolIdent . unPoolIdent . delistedPoolPoolId) delistedPoolsDB
     , dlCheckDelistedPool = \poolId -> do
         runDbIohkLogging sqlBackend tracer $ queryDelistedPool poolId
     , dlAddDelistedPool  = \poolId -> do
-        delistedPoolIdentifier <- runDbIohkLogging sqlBackend tracer $ insertDelistedPool $ DelistedPool poolId
+        delistedPoolIdent <- runDbIohkLogging sqlBackend tracer $ insertDelistedPool $ DelistedPool poolId
 
-        case delistedPoolIdentifier of
+        case delistedPoolIdent of
             Left err  -> return $ Left err
             Right _id -> return $ Right poolId
     , dlRemoveDelistedPool = \poolId -> do

@@ -10,12 +10,12 @@ import           Cardano.Prelude
 
 import           Data.Aeson (ToJSON (..), Value (..), object, (.=))
 
-import           Cardano.Db (PoolIdentifier, PoolMetaHash)
+import           Cardano.Db (PoolIdent, PoolMetaHash)
 
 
 -- | Errors, not exceptions.
 data DBFail
-  = DbLookupPoolMetadataHash !PoolIdentifier !PoolMetaHash
+  = DbLookupPoolMetadataHash !PoolIdent !PoolMetaHash
   | PoolMetadataHashMismatch
   | PoolDelisted
   | UnableToEncodePoolMetadataToJSON !Text

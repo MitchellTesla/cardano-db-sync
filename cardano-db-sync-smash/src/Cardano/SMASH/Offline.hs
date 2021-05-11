@@ -4,7 +4,6 @@
 
 module Cardano.SMASH.Offline
   ( fetchInsertNewPoolMetadata
-  , fetchInsertNewPoolMetadataOld
   , runOfflineFetchThread
   ) where
 
@@ -12,21 +11,19 @@ import           Cardano.Prelude hiding (from, groupBy, on, retry)
 
 import           Cardano.BM.Trace (Trace, logInfo, logWarning)
 
-import           Control.Monad.Logger (LoggingT)
 import           Control.Monad.Trans.Except.Extra (handleExceptT, hoistEither, left)
 
 import           Cardano.SMASH.DB (DataLayer (..), postgresqlDataLayer)
 import           Cardano.SMASH.FetchQueue
-import           Cardano.SMASH.Types (FetchError (..), PoolFetchError (..),
-                   bytestringToPoolMetaHash, pomTicker)
+import           Cardano.SMASH.Types (FetchError (..), pomTicker)
 
 import           Data.Aeson (eitherDecode')
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text as Text
-import qualified Data.Text.Encoding as Text
 
+-- import           Data.Time (UTCTime)
 -- import qualified Data.Time as Time
-import           Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
+import           Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import qualified Data.Time.Clock.POSIX as Time
 
 import qualified Cardano.Crypto.Hash.Blake2b as Crypto
@@ -36,8 +33,6 @@ import           Cardano.Db
 import qualified Cardano.Db as DB
 
 import           Cardano.Sync.Util
-
-import qualified Data.ByteString.Base16 as B16
 
 -- import           Database.Esqueleto (Entity (..), InnerJoin (..), SqlExpr, Value, ValueList, desc,
 --                    from, groupBy, in_, just, max_, notExists, on, orderBy, select, subList_select,
@@ -54,132 +49,95 @@ import qualified Shelley.Spec.Ledger.TxBody as Shelley
 
 -- This is what we call from the actual block-syncing code.
 fetchInsertNewPoolMetadata
-    :: DataLayer
-    -> Trace IO Text
-    -> DB.PoolMetadataRefId
-    -> PoolIdentifier
-    -> Shelley.PoolMetadata
+    :: Trace IO Text -> DataLayer -> DB.PoolMetadataRefId -> PoolIdent -> Shelley.PoolMetadata
     -> IO ()
-fetchInsertNewPoolMetadata dataLayer tracer refId poolId md  = do
-    now <- Time.getPOSIXTime
-    void . fetchInsertNewPoolMetadataOld dataLayer tracer fetchInsertDefault $
-      PoolFetchRetry
-        { pfrReferenceId = refId
-        , pfrPoolIdWtf = poolId
-        , pfrPoolUrl = PoolUrl . Shelley.urlToText . Shelley._poolMDUrl $ md
-        , pfrPoolMDHash = bytestringToPoolMetaHash . Shelley._poolMDHash $ md
-        , pfrRetry = newRetry now
-        }
+fetchInsertNewPoolMetadata tracer dataLayer refId poolIdent md  =
+    mkPoolFetchRetry >>= fetchInsertNewPoolMetadataOld tracer dataLayer
+  where
+    mkPoolFetchRetry :: IO PoolFetchRetry
+    mkPoolFetchRetry = do
+      now <- Time.getPOSIXTime
+      pure $ PoolFetchRetry
+              { pfrReferenceId = refId
+              , pfrPoolIdent = poolIdent
+              , pfrPoolUrl = PoolUrl . Shelley.urlToText $ Shelley._poolMDUrl md
+              , pfrPoolMDHash = PoolMetaHash $ Shelley._poolMDHash md
+              , pfrRetry = newRetry now
+              }
 
 -- Please note that it is possible that a user submits the same pool hash
 -- several times which will result in the fetch being done for each of the entry.
 -- We do this in order to make sure that the metadata wasn't fixed in the meantime.
-fetchInsertNewPoolMetadataOld
-    :: DataLayer
-    -> Trace IO Text
-    -> (DataLayer -> PoolIdentifier -> Trace IO Text -> PoolFetchRetry -> ExceptT FetchError IO ())
-    -> PoolFetchRetry
-    -> IO PoolFetchRetry
-fetchInsertNewPoolMetadataOld dataLayer tracer fetchInsert pfr = do
+fetchInsertNewPoolMetadataOld :: Trace IO Text -> DataLayer -> PoolFetchRetry -> IO ()
+fetchInsertNewPoolMetadataOld tracer dataLayer pfr = do
+    logInfo tracer $ showRetryTimes (pfrRetry pfr)
 
-    logInfo tracer . showRetryTimes $ pfrRetry pfr
-
-    -- We extract the @PoolId@ before so we can map the error to that @PoolId@.
-    let poolId = pfrPoolIdWtf pfr
-    let poolHash = pfrPoolMDHash pfr
-
-    -- POSIX fetch time for the (initial) fetch.
-    let fetchTimePOSIX :: POSIXTime
-        fetchTimePOSIX = fetchTime $ pfrRetry pfr
-
-    -- The current retry counter.
-    let currRetryCount :: Word
-        currRetryCount = retryCount $ pfrRetry pfr
-
-    res <- runExceptT (fetchInsert dataLayer poolId tracer pfr)
+    res <- runExceptT $ fetchInsert tracer dataLayer pfr
 
     -- In the case all went well, we do nothing, but if something went wrong
     -- we log that and add the error to the database.
     case res of
-        Right () -> do
-            logInfo tracer "Pool metadata was fetched with success!"
-            pure pfr
+        Right () ->
+            logInfo tracer "Pool metadata fetch successful!"
 
         Left err -> do
-            logInfo tracer "Pool metadata was NOT fetched with success!"
-
-            -- Increase the retry count.
-            let newRetryCount = currRetryCount + 1
-
-            -- Re-calculate the time for the next retry.
-            let retry = retryAgain fetchTimePOSIX newRetryCount
-
-            let poolMetadataReferenceId = pfrReferenceId pfr
             let fetchError = renderFetchError err
-
-            -- The generated fetch error
-            let _poolFetchError = PoolFetchError fetchTimePOSIX poolId poolHash fetchError
+            logWarning tracer $ "Pool metadata fetch failed: " <> fetchError
 
             let addFetchError = dlAddFetchError dataLayer
 
             -- Here we add the fetch error. The fetch time is always constant.
-            _pmfeIdE <- addFetchError $ PoolMetadataFetchError
-                (posixSecondsToUTCTime fetchTimePOSIX)
-                (panic $ "fetchInsertNewPoolMetadataOld: " <> textShow poolId)
-                -- poolHash
-                poolMetadataReferenceId
-                fetchError
-                newRetryCount
+            _pmfeIdE <- addFetchError $
+                          PoolMetadataFetchError
+                            (posixSecondsToUTCTime . fetchTime $ pfrRetry pfr)
+                            (panic $ "fetchInsertNewPoolMetadataOld: " <> textShow (pfrPoolIdent pfr))
+                            -- poolHash
+                            (pfrReferenceId pfr)
+                            fetchError
+                            (retryCount (pfrRetry pfr) + 1)
+            pure ()
 
-            logWarning tracer fetchError
-
-            -- Here we update the the counter and retry time to update.
-            pure $ pfr { pfrRetry = retry }
 
 -- |We pass in the @PoolId@ so we can know from which pool the error occured.
-fetchInsertDefault
-    :: DataLayer
-    -> PoolIdentifier
-    -> Trace IO Text
-    -> PoolFetchRetry
-    -> ExceptT FetchError IO ()
-fetchInsertDefault dataLayer poolId tracer pfr = do
+fetchInsert :: Trace IO Text -> DataLayer -> PoolFetchRetry -> ExceptT FetchError IO ()
+fetchInsert tracer dataLayer pfr = do
     -- This is a bit bad to do each time, but good enough for now.
     manager <- liftIO $ Http.newManager tlsManagerSettings
 
-    let poolMetadataURL = getPoolUrl $ pfrPoolUrl pfr
+    let poolMetadataURL = pfrPoolUrl pfr
 
-    liftIO . logInfo tracer $ "Request URL: " <> poolMetadataURL
+    liftIO . logInfo tracer $ "Request URL: " <> unPoolUrl poolMetadataURL
 
     -- This is a weird Error.
-    request <- handleExceptT (\(_ :: HttpException) -> FEUrlParseFail poolId poolMetadataURL poolMetadataURL)
-                $ Http.parseRequest (toS poolMetadataURL)
+    request <- handleExceptT (\(err :: HttpException) -> FEUrlParseFail (pfrPoolIdent pfr) poolMetadataURL (textShow err))
+                $ Http.parseRequest (Text.unpack $ unPoolUrl poolMetadataURL)
 
-    (respBS, status) <- httpGetMax512Bytes poolId poolMetadataURL request manager
+    (respBS, status) <- httpGet512BytesMax (pfrPoolIdent pfr) poolMetadataURL request manager
 
     when (Http.statusCode status /= 200) .
-      left $ FEHttpResponse poolId poolMetadataURL (Http.statusCode status)
+      left $ FEHttpResponse (pfrPoolIdent pfr) poolMetadataURL (Http.statusCode status)
 
     liftIO . logInfo tracer $ "Response: " <> show (Http.statusCode status)
 
-    decodedMetadata <- case eitherDecode' (LBS.fromStrict respBS) of
-                        Left err     -> left $ FEJsonDecodeFail poolId poolMetadataURL (toS err)
-                        Right result -> pure result
+    decodedMetadata <-
+        case eitherDecode' (LBS.fromStrict respBS) of
+            Left err -> left $ FEJsonDecodeFail (pfrPoolIdent pfr) poolMetadataURL (Text.pack err)
+            Right res -> pure res
 
     -- Let's check the hash
-    let hashFromMetadata = Crypto.digest (Proxy :: Proxy Crypto.Blake2b_256) respBS
-        expectedHash = getPoolMetaHash (pfrPoolMDHash pfr)
+    let metadataHash = Crypto.digest (Proxy :: Proxy Crypto.Blake2b_256) respBS
+        expectedHash = unPoolMetaHash (pfrPoolMDHash pfr)
 
-    if bytestringToPoolMetaHash hashFromMetadata /= pfrPoolMDHash pfr
-      then left $ FEHashMismatch poolId expectedHash (renderByteStringHex hashFromMetadata) poolMetadataURL
-      else liftIO . logInfo tracer $ "Inserting pool data with hash: " <> expectedHash
+    if PoolMetaHash metadataHash /= pfrPoolMDHash pfr
+      then left $ FEHashMismatch (pfrPoolIdent pfr) poolMetadataURL (renderByteArray expectedHash) (renderByteArray metadataHash)
+      else liftIO . logInfo tracer $ "Inserting pool data with hash: " <> renderByteArray expectedHash
 
     let addPoolMetadata = dlAddPoolMetadata dataLayer
 
     _ <- liftIO $
             addPoolMetadata
                 (Just $ pfrReferenceId pfr)
-                (pfrPoolIdWtf pfr)
+                (pfrPoolIdent pfr)
                 (pfrPoolMDHash pfr)
                 (PoolMetadataRaw $ decodeUtf8 respBS)
                 (pomTicker decodedMetadata)
@@ -191,7 +149,7 @@ runOfflineFetchThread :: SqlBackend -> Trace IO Text -> IO ()
 runOfflineFetchThread backend trce = do
     liftIO $ logInfo trce "Runing Offline fetch thread"
     let dataLayer = postgresqlDataLayer backend trce
-    fetchLoop backend dataLayer FetchLoopForever trce queryPoolFetchRetryDefault
+    fetchLoop trce backend dataLayer FetchLoopForever
 
 ---------------------------------------------------------------------------------------------------
 
@@ -200,24 +158,14 @@ data FetchLoopType
     | FetchLoopOnce
     deriving (Eq, Show)
 
-isFetchLoopForever :: FetchLoopType -> Bool
-isFetchLoopForever FetchLoopForever = True
-isFetchLoopForever FetchLoopOnce    = False
-
-fetchLoop
-    :: forall m. MonadIO m
-    => SqlBackend
-    -> DataLayer
-    -> FetchLoopType
-    -> Trace IO Text
-    -> ReaderT SqlBackend (LoggingT IO) [PoolFetchRetry] -- This should be in the @DataLayer@
-    -> m ()
-fetchLoop sqlBackend dataLayer fetchLoopType trce queryPoolFetchRetry =
-    loop
+fetchLoop :: Trace IO Text -> SqlBackend -> DataLayer -> FetchLoopType -> IO ()
+fetchLoop trce sqlBackend dataLayer fetchLoopType =
+    case fetchLoopType of
+      FetchLoopForever -> forever work
+      FetchLoopOnce -> work
   where
-    loop :: m ()
-    loop = do
-
+    work :: IO ()
+    work = do
       -- A interval pause so we don't do too much work on this thread.
       liftIO $ threadDelay 60_000_000 -- 60 seconds
 
@@ -235,53 +183,44 @@ fetchLoop sqlBackend dataLayer fetchLoopType trce queryPoolFetchRetry =
 
       liftIO $ logInfo trce $
         mconcat
-          [ " ***************************** "
-          , "Pools with errors: total "
-          , show (length pools)
-          , ", runnable "
-          , show (length runnablePools)
-          , "."
+          [ " ***************************** ", "Pools with errors: total "
+          , textShow (length pools), ", runnable ", textShow (length runnablePools), "."
           ]
 
       -- We actually run the fetch again.
-      _ <- liftIO $ forM runnablePools $ \pool ->
-          fetchInsertNewPoolMetadataOld dataLayer trce fetchInsertDefault pool
+      liftIO $ forM_ runnablePools $ \ pool ->
+          fetchInsertNewPoolMetadataOld trce dataLayer pool
+      pure ()
 
-      -- If it loops forever then loop, else finish. For testing.
-      if isFetchLoopForever fetchLoopType
-        then loop
-        else pure ()
-
-httpGetMax512Bytes
-    :: PoolIdentifier
-    -> Text
-    -> Http.Request
-    -> Http.Manager
+httpGet512BytesMax
+    :: PoolIdent -> PoolUrl -> Http.Request -> Http.Manager
     -> ExceptT FetchError IO (ByteString, Http.Status)
-httpGetMax512Bytes poolId poolMetadataURL request manager = do
-    res <- handleExceptT (convertHttpException poolId poolMetadataURL) $
-            Http.withResponse request manager $ \responseBR -> do
-              -- We read the first chunk that should contain all the bytes from the reponse.
-              responseBSFirstChunk <- Http.brReadSome (Http.responseBody responseBR) 512
-              -- If there are more bytes in the second chunk, we don't go any further since that
-              -- violates the size constraint.
-              responseBSSecondChunk <- Http.brReadSome (Http.responseBody responseBR) 1
-              if LBS.null responseBSSecondChunk
-                then pure $ Right (LBS.toStrict responseBSFirstChunk, Http.responseStatus responseBR)
-                else pure $ Left $ FEDataTooLong poolId poolMetadataURL
-
+httpGet512BytesMax pool url request manager = do
+    res <- handleExceptT (convertHttpException pool url) httpGet
     hoistEither res
+  where
+    httpGet :: IO (Either FetchError (ByteString, Http.Status))
+    httpGet =
+      Http.withResponse request manager $ \responseBR -> do
+        -- We read the first chunk that should contain all the bytes from the reponse.
+        responseBSFirstChunk <- Http.brReadSome (Http.responseBody responseBR) 512
+        -- If there are more bytes in the second chunk, we don't go any further since that
+        -- violates the size constraint.
+        responseBSSecondChunk <- Http.brReadSome (Http.responseBody responseBR) 1
+        if LBS.null responseBSSecondChunk
+          then pure $ Right (LBS.toStrict responseBSFirstChunk, Http.responseStatus responseBR)
+          else pure $ Left (FEDataTooLong pool url)
 
-convertHttpException :: PoolIdentifier -> Text -> HttpException -> FetchError
-convertHttpException poolId poolMetadataURL he =
+convertHttpException :: PoolIdent -> PoolUrl -> HttpException -> FetchError
+convertHttpException pool url he =
   case he of
     HttpExceptionRequest _req hec ->
       case hec of
-        Http.ResponseTimeout      -> FETimeout poolId poolMetadataURL "Response"
-        Http.ConnectionTimeout    -> FETimeout poolId poolMetadataURL "Connection"
-        Http.ConnectionFailure {} -> FEConnectionFailure poolId poolMetadataURL
-        other                     -> FEHttpException poolId poolMetadataURL (show other)
-    InvalidUrlException url _ -> FEUrlParseFail poolId poolMetadataURL (Text.pack url)
+        Http.ResponseTimeout -> FETimeout pool url "Response"
+        Http.ConnectionTimeout -> FETimeout pool url "Connection"
+        Http.ConnectionFailure {} -> FEConnectionFailure pool url
+        other -> FEHttpException pool url (show other)
+    InvalidUrlException urlx err -> FEUrlParseFail pool (PoolUrl $ Text.pack urlx) (Text.pack err)
 
 -- select * from pool_metadata_fetch_error pmfr
 --   where pmfr.id in (select max(id) from pool_metadata_fetch_error group by pool_id, pool_hash)
@@ -291,12 +230,12 @@ convertHttpException poolId poolMetadataURL he =
 -- no PoolMetadata entry.
 -- This is a bit questionable because it assumes that the autogenerated 'id' primary key
 -- is a reliable proxy for time, ie higher 'id' was added later in time.
-queryPoolFetchRetryDefault :: ReaderT SqlBackend m [PoolFetchRetry]
-queryPoolFetchRetryDefault =
-  panic "queryPoolFetchRetryDefault"
+queryPoolFetchRetry :: ReaderT SqlBackend m [PoolFetchRetry]
+queryPoolFetchRetry =
+  panic "queryPoolFetchRetry"
 
 {-
-queryPoolFetchRetryDefault = do
+queryPoolFetchRetry = do
     pmfr <- select . from $ \((pmfr :: SqlExpr (Entity PoolMetadataFetchError)) `InnerJoin` (pmr :: SqlExpr (Entity PoolMetadataRef))) -> do
                 on (pmfr ^. DB.PoolMetadataFetchErrorPmrId ==. pmr ^. DB.PoolMetadataRefId)
                 where_ (just (pmfr ^. DB.PoolMetadataFetchErrorId) `in_` latestReferences)
@@ -319,14 +258,14 @@ queryPoolFetchRetryDefault = do
         groupBy (pmfr ^. DB.PoolMetadataFetchErrorPoolId, pmfr ^. DB.PoolMetadataFetchErrorPoolHash)
         pure $ max_ (pmfr ^. DB.PoolMetadataFetchErrorId)
 
-    convert :: (Time.UTCTime, PoolMetadataRefId, PoolIdentifier, PoolUrl, PoolMetaHash, Word) -> PoolFetchRetry
+    convert :: (UTCTime, PoolMetadataRefId, PoolIdent, PoolUrl, PoolMetaHash, Word) -> PoolFetchRetry
     convert (fetchTime', poolMetadataReferenceId, poolId, poolUrl, poolMetadataHash', existingRetryCount) =
         let fetchTimePOSIX = Time.utcTimeToPOSIXSeconds fetchTime'
             retry = retryAgain fetchTimePOSIX existingRetryCount
         in
             PoolFetchRetry
               { pfrReferenceId = poolMetadataReferenceId
-              , pfrPoolIdWtf = poolId
+              , pfrPoolIdent = poolId
               , pfrPoolUrl = poolUrl
               , pfrPoolMDHash = poolMetadataHash'
               , pfrRetry = retry
@@ -337,84 +276,48 @@ queryPoolFetchRetryDefault = do
     unValue6 (a, b, c, d, e, f) = (unValue a, unValue b, unValue c, unValue d, unValue e, unValue f)
 -}
 
-renderByteStringHex :: ByteString -> Text
-renderByteStringHex = Text.decodeUtf8 . B16.encode
-
 renderFetchError :: FetchError -> Text
 renderFetchError fe =
   case fe of
-    FEHashMismatch poolId xpt act poolMetaUrl ->
-        mconcat
-            [ "Hash mismatch from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "'. Expected "
-            , xpt
-            , " but got "
-            , act
-            , "."
-            ]
-    FEDataTooLong poolId poolMetaUrl ->
-        mconcat
-            [ "Offline pool data from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "' exceeded 512 bytes."
-            ]
-    FEUrlParseFail poolId poolMetaUrl err ->
-        mconcat
-            [ "URL parse error from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "' resulted in : "
-            , err
-            ]
-    FEJsonDecodeFail poolId poolMetaUrl err ->
-        mconcat
-            [ "JSON decode error from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "' resulted in : "
-            , err
-            ]
-    FEHttpException poolId poolMetaUrl err ->
-        mconcat
-            [ "HTTP Exception from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "' resulted in : "
-            , err
-            ]
-    FEHttpResponse poolId poolMetaUrl sc ->
-        mconcat
-            [ "HTTP Response from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "' resulted in : "
-            , show sc
-            ]
-    FETimeout poolId poolMetaUrl ctx ->
-        mconcat
-            [ ctx
-            , " timeout from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "'."
-            ]
-    FEConnectionFailure poolId poolMetaUrl ->
-        mconcat
-            [ "Connection failure from poolId '"
-            , getPoolIdentifier poolId
-            , "' when fetching metadata from '"
-            , poolMetaUrl
-            , "'."
-            ]
+    FEHashMismatch (PoolIdent pool) (PoolUrl url) xpt act ->
+      mconcat
+        [ "Hash mismatch from ", pool, " when fetching metadata from ", url
+        , ". Expected ", xpt, " but got ", act, "."
+        ]
+    FEDataTooLong (PoolIdent pool) (PoolUrl url) ->
+      mconcat
+        [ "Offline pool data from ", pool, " when fetching metadata from ", url
+        , " exceeded 512 bytes."
+        ]
+    FEUrlParseFail (PoolIdent pool) (PoolUrl url) err ->
+      mconcat
+        [ "URL parse error from ", pool, " when fetching metadata from ", url
+        , "' resulted in : ", err
+        ]
+    FEJsonDecodeFail (PoolIdent pool) (PoolUrl url) err ->
+      mconcat
+        [ "JSON decode error from ", pool, " when fetching metadata from ", url
+        , " resulted in : ", err
+        ]
+    FEHttpException (PoolIdent pool) (PoolUrl url) err ->
+      mconcat
+        [ "HTTP Exception from ", pool, " when fetching metadata from ", url
+        , " resulted in : ", err
+        ]
+    FEHttpResponse (PoolIdent pool) (PoolUrl url) sc ->
+      mconcat
+        [ "HTTP Response from ", pool, " when fetching metadata from ", url
+        , " resulted in : ", textShow sc
+        ]
+    FETimeout (PoolIdent pool) (PoolUrl url) ctx ->
+      mconcat
+        [ ctx, " timeout from ", pool, " when fetching metadata from "
+        , url, "."
+        ]
+    FEConnectionFailure (PoolIdent pool) (PoolUrl url) ->
+      mconcat
+        [ "Connection failure from pool ", pool, " when fetching metadata from "
+        , url, "'."
+        ]
     FEIOException err -> "IO Exception: " <> err
 
