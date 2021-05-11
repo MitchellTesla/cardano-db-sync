@@ -25,8 +25,8 @@ data PoolFetchRetry = PoolFetchRetry
   } deriving (Show)
 
 data Retry = Retry
-  { fetchTime  :: !POSIXTime
-  , retryTime  :: !POSIXTime
+  { fetchTime :: !POSIXTime
+  , retryTime :: !POSIXTime
   , retryCount :: !Word
   } deriving (Eq, Show, Generic)
 

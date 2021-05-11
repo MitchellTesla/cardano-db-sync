@@ -10,7 +10,7 @@ module Cardano.SMASH.DBSync.Db.Insert
   , insertDelistedPool
   , insertRetiredPool
   , insertAdminUser
-  , insertPoolMetadataFetchError
+  , insertPoolOfflineFetchError
 
   -- Export mainly for testing.
   , insertByReturnKey
@@ -33,14 +33,8 @@ insertPool :: pool -> ReaderT SqlBackend m (Either DBFail poolId)
 insertPool _ = panic "insertPool"
 -- insertByReturnKey
 
-insertPoolMetadata :: PoolMetadata -> ReaderT SqlBackend m (Either DBFail PoolMetadataId)
+insertPoolMetadata :: PoolMetadataRef -> ReaderT SqlBackend m (Either DBFail PoolMetadataRefId)
 insertPoolMetadata _ = panic "insertPoolMetadata"
--- insertByReturnKey
-
-insertPoolMetadataRef
-    :: PoolMetadataRef
-    -> ReaderT SqlBackend m (Either DBFail PoolMetadataRefId)
-insertPoolMetadataRef _ = panic "insertPoolMetadataRef"
 -- insertByReturnKey
 
 insertReservedTicker :: (MonadIO m) => ReservedTicker -> ReaderT SqlBackend m (Either DBFail ReservedTickerId)
@@ -71,11 +65,11 @@ insertAdminUser adminUser = do
         Nothing -> insertByReturnKey adminUser
         Just _key -> pure . Left . DbInsertError $ "Admin user already exists!"
 
-insertPoolMetadataFetchError
+insertPoolOfflineFetchError
     :: (MonadIO m)
-    => PoolMetadataFetchError
-    -> ReaderT SqlBackend m (Either DBFail PoolMetadataFetchErrorId)
-insertPoolMetadataFetchError pmfe = do
+    => PoolOfflineFetchError
+    -> ReaderT SqlBackend m (Either DBFail PoolOfflineFetchErrorId)
+insertPoolOfflineFetchError pmfe = do
     isUnique <- checkUnique pmfe
     -- If there is no unique constraint violated, insert, otherwise delete and insert.
     case isUnique of

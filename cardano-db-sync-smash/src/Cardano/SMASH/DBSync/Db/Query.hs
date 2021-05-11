@@ -13,8 +13,8 @@ module Cardano.SMASH.DBSync.Db.Query
   , queryAllReservedTickers
   , queryReservedTicker
   , queryAdminUsers
-  , queryPoolMetadataFetchError
-  , queryPoolMetadataFetchErrorByTime
+  , queryPoolOfflineFetchError
+  , queryPoolOfflineFetchErrorByTime
   , queryAllRetiredPools
   , queryRetiredPool
   ) where
@@ -58,7 +58,7 @@ queryPoolByPoolId poolId = do
 -}
 
 -- |Return all retired pools.
-queryAllPoolMetadata :: ReaderT SqlBackend m [PoolMetadata]
+queryAllPoolMetadata :: ReaderT SqlBackend m [PoolMetadataRef]
 queryAllPoolMetadata =
   panic "queryAllPoolMetadata"
 {-
@@ -68,7 +68,7 @@ queryAllPoolMetadata =
 
 -- | Get the 'Block' associated with the given hash.
 -- We use the @PoolIdent@ to get the nice error message out.
-queryPoolMetadata :: PoolIdent -> PoolMetaHash -> ReaderT SqlBackend m (Either DBFail PoolMetadata)
+queryPoolMetadata :: PoolIdent -> PoolMetaHash -> ReaderT SqlBackend m (Either DBFail PoolMetadataRef)
 queryPoolMetadata poolId poolMetadataHash' = do
   panic $ "queryPoolMetadata: " <> textShow (poolId, poolMetadataHash')
 
@@ -149,18 +149,18 @@ queryAdminUsers = do
   pure $ entityVal <$> res
 
 -- | Query all the errors we have.
-queryPoolMetadataFetchError :: Maybe PoolIdent -> ReaderT SqlBackend m [PoolMetadataFetchError]
-queryPoolMetadataFetchError mPoolId =
-  panic $ "queryPoolMetadataFetchError: " <> textShow mPoolId
+queryPoolOfflineFetchError :: Maybe PoolIdent -> ReaderT SqlBackend m [PoolOfflineFetchError]
+queryPoolOfflineFetchError mPoolId =
+  panic $ "queryPoolOfflineFetchError: " <> textShow mPoolId
 
 {-
-queryPoolMetadataFetchError Nothing = do
+queryPoolOfflineFetchError Nothing = do
   res <- selectList [] []
   pure $ entityVal <$> res
 
-queryPoolMetadataFetchError (Just poolId) = do
-  res <- select . from $ \(poolMetadataFetchError :: SqlExpr (Entity PoolMetadataFetchError)) -> do
-            where_ (poolMetadataFetchError ^. PoolMetadataFetchErrorPoolId ==. val poolId)
+queryPoolOfflineFetchError (Just poolId) = do
+  res <- select . from $ \(poolMetadataFetchError :: SqlExpr (Entity PoolOfflineFetchError)) -> do
+            where_ (poolMetadataFetchError ^. PoolOfflineFetchErrorPoolId ==. val poolId)
             pure poolMetadataFetchError
   pure $ fmap entityVal res
 -}
@@ -168,26 +168,26 @@ queryPoolMetadataFetchError (Just poolId) = do
 -- We currently query the top 10 errors (chronologically) when we don't have the time parameter, but we would ideally
 -- want to see the top 10 errors from _different_ pools (group by), using something like:
 -- select pool_id, pool_hash, max(retry_count) from pool_metadata_fetch_error group by pool_id, pool_hash;
-queryPoolMetadataFetchErrorByTime
+queryPoolOfflineFetchErrorByTime
     :: PoolIdent
     -> Maybe UTCTime
-    -> ReaderT SqlBackend m [PoolMetadataFetchError]
-queryPoolMetadataFetchErrorByTime poolId _ =
-  panic $ "queryPoolMetadataFetchErrorByTime: " <> textShow poolId
+    -> ReaderT SqlBackend m [PoolOfflineFetchError]
+queryPoolOfflineFetchErrorByTime poolId _ =
+  panic $ "queryPoolOfflineFetchErrorByTime: " <> textShow poolId
 {-
-queryPoolMetadataFetchErrorByTime poolId Nothing = do
-  res <- select . from $ \(poolMetadataFetchError :: SqlExpr (Entity PoolMetadataFetchError)) -> do
-            where_ (poolMetadataFetchError ^. PoolMetadataFetchErrorPoolId ==. val poolId)
-            orderBy [desc (poolMetadataFetchError ^. PoolMetadataFetchErrorFetchTime)]
+queryPoolOfflineFetchErrorByTime poolId Nothing = do
+  res <- select . from $ \(poolMetadataFetchError :: SqlExpr (Entity PoolOfflineFetchError)) -> do
+            where_ (poolMetadataFetchError ^. PoolOfflineFetchErrorPoolId ==. val poolId)
+            orderBy [desc (poolMetadataFetchError ^. PoolOfflineFetchErrorFetchTime)]
             limit 10
             pure poolMetadataFetchError
   pure $ fmap entityVal res
 
-queryPoolMetadataFetchErrorByTime poolId (Just fromTime) = do
-  res <- select . from $ \(poolMetadataFetchError :: SqlExpr (Entity PoolMetadataFetchError)) -> do
-            where_ (poolMetadataFetchError ^. PoolMetadataFetchErrorPoolId ==. val poolId
-                &&. poolMetadataFetchError ^. PoolMetadataFetchErrorFetchTime >=. val fromTime)
-            orderBy [desc (poolMetadataFetchError ^. PoolMetadataFetchErrorFetchTime)]
+queryPoolOfflineFetchErrorByTime poolId (Just fromTime) = do
+  res <- select . from $ \(poolMetadataFetchError :: SqlExpr (Entity PoolOfflineFetchError)) -> do
+            where_ (poolMetadataFetchError ^. PoolOfflineFetchErrorPoolId ==. val poolId
+                &&. poolMetadataFetchError ^. PoolOfflineFetchErrorFetchTime >=. val fromTime)
+            orderBy [desc (poolMetadataFetchError ^. PoolOfflineFetchErrorFetchTime)]
             pure poolMetadataFetchError
   pure $ fmap entityVal res
 -}

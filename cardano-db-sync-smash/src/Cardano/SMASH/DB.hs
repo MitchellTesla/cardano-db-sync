@@ -28,7 +28,7 @@ import           Database.Persist.Sql (SqlBackend)
 -- import           Cardano.SMASH.DBSync.Db.Delete (deleteAdminUser, deleteDelistedPool,
 --                    deleteRetiredPool)
 -- import           Cardano.SMASH.DBSync.Db.Insert (insertAdminUser, insertDelistedPool, insertPool,
---                    insertPoolMetadata, insertPoolMetadataFetchError, insertPoolMetadataRef,
+--                    insertPoolMetadata, insertPoolOfflineFetchError, insertPoolMetadataRef,
 --                    insertReservedTicker, insertRetiredPool)
 import           Cardano.SMASH.DBSync.Db.Query
 import           Cardano.SMASH.Types
@@ -41,7 +41,7 @@ import           Cardano.SMASH.Db.Error as X
 -- but currently there is no complexity involved for that to be a sane choice.
 data DataLayer = DataLayer
     { dlGetPoolMetadata         :: PoolIdent -> PoolMetaHash -> IO (Either DBFail (TickerName, PoolMetadataRaw))
-    , dlGetAllPoolMetadata      :: IO [PoolMetadata]
+    , dlGetAllPoolMetadata      :: IO [PoolMetadataRef]
     , dlAddPoolMetadata         :: Maybe PoolMetadataRefId -> PoolIdent -> PoolMetaHash -> PoolMetadataRaw -> PoolTicker -> IO (Either DBFail PoolMetadataRaw)
 
     , dlAddMetaDataReference    :: PoolIdent -> PoolUrl -> PoolMetaHash -> IO (Either DBFail PoolMetadataRefId)
@@ -65,7 +65,7 @@ data DataLayer = DataLayer
     , dlRemoveAdminUser         :: ApplicationUser -> IO (Either DBFail AdminUser)
 
     -- TODO(KS): Switch to PoolFetchError!
-    , dlAddFetchError           :: PoolMetadataFetchError -> IO (Either DBFail PoolMetadataFetchErrorId)
+    , dlAddFetchError           :: PoolOfflineFetchError -> IO (Either DBFail PoolOfflineFetchErrorId)
     , dlGetFetchErrors          :: PoolIdent -> Maybe UTCTime -> IO (Either DBFail [PoolFetchError])
 
     , dlGetPool                 :: PoolIdent -> IO (Either DBFail PoolIdent)
@@ -464,10 +464,10 @@ postgresqlDataLayer sqlBackend tracer = DataLayer
             then return $ Right adminUser
             else return $ Left $ UnknownError "Admin user not deleted. Both username and password must match."
 
-    , dlAddFetchError       = runDbIohkLogging sqlBackend tracer . insertPoolMetadataFetchError
+    , dlAddFetchError       = runDbIohkLogging sqlBackend tracer . insertPoolOfflineFetchError
     , dlGetFetchErrors      = \poolId mTimeFrom -> do
-        poolMetadataFetchErrors <- runDbIohkLogging sqlBackend tracer (queryPoolMetadataFetchErrorByTime poolId mTimeFrom)
-        pure $ sequence $ Right <$> map convertPoolMetadataFetchError poolMetadataFetchErrors
+        poolMetadataFetchErrors <- runDbIohkLogging sqlBackend tracer (queryPoolOfflineFetchErrorByTime poolId mTimeFrom)
+        pure $ sequence $ Right <$> map convertPoolOfflineFetchError poolMetadataFetchErrors
 
     , dlGetPool             = \poolId -> do
         pool <- runDbIohkLogging sqlBackend tracer $ queryPoolByPoolId poolId
@@ -482,7 +482,7 @@ postgresqlDataLayer sqlBackend tracer = DataLayer
 
     }
 
-convertPoolMetadataFetchError :: PoolMetadataFetchError -> PoolFetchError
-convertPoolMetadataFetchError (PoolMetadataFetchError timeUTC poolId poolHash _pMRId fetchError retryCount) =
+convertPoolOfflineFetchError :: PoolOfflineFetchError -> PoolFetchError
+convertPoolOfflineFetchError (PoolOfflineFetchError timeUTC poolId poolHash _pMRId fetchError retryCount) =
     PoolFetchError (utcTimeToPOSIXSeconds timeUTC) poolId poolHash fetchError retryCount
 -}
