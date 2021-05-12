@@ -198,7 +198,6 @@ share
     fixedCost           DbLovelace          sqltype=lovelace
     registeredTxId      TxId                OnDeleteCascade     -- Slot number in which the pool was registered.
     UniquePoolUpdate    hashId registeredTxId
-    deriving Show
 
   PoolOwner
     addrId              StakeAddressId      OnDeleteCascade
