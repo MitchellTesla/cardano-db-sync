@@ -296,8 +296,7 @@ insertPoolRegister tracer network (EpochNo epoch) txId idx params = do
             Just md -> Just <$> insertMetaDataRef poolHashId txId md
             Nothing -> pure Nothing
 
-  poolUpdateId <- lift . DB.insertPoolUpdate $
-                    DB.PoolUpdate
+  let poolUpdate = DB.PoolUpdate
                       { DB.poolUpdateHashId = poolHashId
                       , DB.poolUpdateCertIndex = idx
                       , DB.poolUpdateVrfKeyHash = Crypto.hashToBytes (Shelley._poolVrf params)
@@ -309,6 +308,10 @@ insertPoolRegister tracer network (EpochNo epoch) txId idx params = do
                       , DB.poolUpdateFixedCost = Generic.coinToDbLovelace (Shelley._poolCost params)
                       , DB.poolUpdateRegisteredTxId = txId
                       }
+
+  liftIO $ logInfo tracer (textShow poolUpdate)
+
+  poolUpdateId <- lift . DB.insertPoolUpdate $ poolUpdate
 
   mapM_ (insertPoolOwner network poolHashId txId) $ toList (Shelley._poolOwners params)
   mapM_ (insertPoolRelay poolUpdateId) $ toList (Shelley._poolRelays params)
